@@ -31,17 +31,17 @@ import json
 import statistics
 import sys
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 
 # Allow running both as `python src/eval_harness.py` and as an import from tests.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import agent as agent_module  # noqa: E402
-from agent import AgentEngine, NormalizedMessage  # noqa: E402
-
+import agent as agent_module
+from agent import AgentEngine, NormalizedMessage
 
 # ---------------------------------------------------------------------------
 # Result / task model
@@ -173,7 +173,7 @@ async def run_task(engine: AgentEngine, task: EvalTask, session_id: str | None =
                 elif etype == "final_answer":
                     result.final_text = event.get("content", "")
                     result.outcome = event.get("reason", "final_answer")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         result.error = f"{type(exc).__name__}: {exc}"
         result.outcome = "harness_error"
 
@@ -186,7 +186,7 @@ async def run_task(engine: AgentEngine, task: EvalTask, session_id: str | None =
 
     try:
         result.passed = bool(task.check(result))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         result.passed = False
         result.error = (result.error or "") + f" check_error: {exc}"
     return result
