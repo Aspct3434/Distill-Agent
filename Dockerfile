@@ -29,12 +29,28 @@ WORKDIR /app
 # Copy the entire installed package tree from builder (no pip needed at runtime)
 COPY --from=builder /install /usr/local
 
+# Runtime system packages:
+#  curl            — needed by rustup and any agent task that fetches URLs
+#  ca-certificates — required by cargo/rustup TLS when downloading from crates.io;
+#                    without this, every `cargo build` that pulls from the registry
+#                    fails TLS verification silently, even when internet is reachable
+#  git             — cargo fetches git-source dependencies; also common agent tool
+#  build-essential — gcc/make so the agent can compile native crates (e.g. openssl-sys)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Application source
 COPY src/ ./src/
 
-# Dedicated non-root user
+# Dedicated non-root user WITH a home directory so that rustup/cargo work
+# without the agent having to override CARGO_HOME on every invocation.
+# The shell is set to /bin/bash (not nologin) so execute_terminal_command works.
 RUN groupadd --gid 1001 agent \
-    && useradd --uid 1001 --gid agent --no-create-home --shell /sbin/nologin agent \
+    && useradd --uid 1001 --gid agent --create-home --shell /bin/bash agent \
     && mkdir -p /app/data /app/published_sites /app/skills /app/chroma_data \
     && chown -R agent:agent /app
 

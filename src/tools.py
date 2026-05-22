@@ -70,7 +70,18 @@ def _detect_posix_shell() -> list[str] | None:
 # Resolved once at import time; None means the OS already provides a POSIX shell.
 _POSIX_SHELL: list[str] | None = _detect_posix_shell()
 
-_PROBED_RUNTIMES = ("java", "python", "python3", "node", "curl", "git", "docker")
+_PROBED_RUNTIMES = (
+    # Interpreters / runtimes
+    "java", "python", "python3", "node", "ruby", "go",
+    # Build toolchain — important: agent needs to know these BEFORE attempting compiles
+    "rustc", "cargo", "gcc", "g++", "make", "cmake",
+    # Package / download utilities
+    "curl", "wget", "git",
+    # Container / orchestration
+    "docker", "docker-compose",
+    # Package managers
+    "npm", "pip", "pip3",
+)
 
 # ---------------------------------------------------------------------------
 # Security: command safety gate
@@ -134,11 +145,13 @@ GET_SYSTEM_ENVIRONMENT_TOOL: dict[str, Any] = {
     "server": "__builtin__",
     "name": "get_system_environment",
     "description": (
-        "Return a JSON snapshot of the host system environment: OS type, available "
-        "disk space on the working directory's filesystem, and which core runtimes "
-        "(java, python, python3, node, curl, git, docker) are present on PATH. "
-        "Call this whenever you need to adapt behaviour to the host platform or "
-        "verify that a required runtime exists before invoking it."
+        "Return a JSON snapshot of the host system environment. Includes: OS type, "
+        "disk space, which runtimes are on PATH (rustc, cargo, gcc, make, curl, wget, "
+        "git, node, python, docker, npm, and more), the active shell, and critically "
+        "the running user identity with is_root and sudo_available flags. "
+        "ALWAYS call this first before attempting any package install (apt-get, "
+        "rustup, npm, pip) so you know whether system-level installs will succeed "
+        "or whether you need a per-user install path."
     ),
     "inputSchema": {
         "type": "object",
@@ -1173,6 +1186,32 @@ def _collect_system_environment() -> str:
     else:
         shell_info = {"shell": "/bin/sh", "posix": True}
 
+    # User identity and privilege level — critical for the agent to know BEFORE
+    # attempting package installs (apt-get/yum/brew all require root or sudo).
+    import getpass as _getpass
+    try:
+        username = _getpass.getuser()
+    except Exception:
+        username = os.environ.get("USER", os.environ.get("USERNAME", "unknown"))
+    is_root = (os.geteuid() == 0) if hasattr(os, "geteuid") else (username in {"root", "Administrator"})
+    sudo_available = shutil.which("sudo") is not None
+    home_dir = str(Path.home())
+    home_exists = Path(home_dir).is_dir()
+
+    user_info: dict[str, Any] = {
+        "username": username,
+        "is_root": is_root,
+        "sudo_available": sudo_available,
+        "home_dir": home_dir,
+        "home_exists": home_exists,
+    }
+    if not is_root and not sudo_available:
+        user_info["warning"] = (
+            "Running as non-root without sudo. Package managers (apt-get, yum, brew) "
+            "will fail. Use rustup to ~/.cargo, pip install --user, or nvm for "
+            "per-user toolchain installs instead."
+        )
+
     return json.dumps(
         {
             "os": os_label,
@@ -1182,6 +1221,7 @@ def _collect_system_environment() -> str:
             "disk_cwd": disk,
             "runtimes": runtimes,
             "shell": shell_info,
+            "user": user_info,
         },
         indent=2,
     )
