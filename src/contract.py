@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from evaluator import ExecutionStep
@@ -125,7 +126,59 @@ def _current_task_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
 # avoid a circular import: planning.py imports contract, not vice-versa)
 # ---------------------------------------------------------------------------
 
+# Canonical plan statuses and tolerant synonyms. The model frequently emits
+# near-miss spellings ("waiting", "complete", "in progress"); coercing them to
+# the canonical set keeps a slightly-wrong update_plan call from silently
+# no-opping and trapping the agent with a plan whose steps never close.
+_VALID_PLAN_STATUSES: frozenset[str] = frozenset(
+    {"pending", "in_progress", "done", "failed"}
+)
+_PLAN_STATUS_SYNONYMS: dict[str, str] = {
+    "todo": "pending",
+    "not_started": "pending",
+    "notstarted": "pending",
+    "waiting": "pending",
+    "queued": "pending",
+    "open": "pending",
+    "new": "pending",
+    "active": "in_progress",
+    "doing": "in_progress",
+    "started": "in_progress",
+    "running": "in_progress",
+    "wip": "in_progress",
+    "inprogress": "in_progress",
+    "complete": "done",
+    "completed": "done",
+    "finished": "done",
+    "success": "done",
+    "succeeded": "done",
+    "ok": "done",
+    "error": "failed",
+    "errored": "failed",
+    "cancelled": "failed",
+    "canceled": "failed",
+    "skipped": "failed",
+    "blocked": "failed",
+    "abandoned": "failed",
+}
+
+
+def _normalise_plan_status(value: Any) -> str:
+    """Map a model-supplied status string onto the canonical four-value set."""
+    token = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if token in _VALID_PLAN_STATUSES:
+        return token
+    return _PLAN_STATUS_SYNONYMS.get(token, "pending")
+
+
 def _coerce_plan_steps(value: Any) -> list[dict[str, Any]] | None:
+    """Normalise an update_plan steps array into clean ``{title, status}`` dicts.
+
+    Tolerant of the common malformed shapes the model produces: a JSON string
+    instead of a list, ``step``/``name``/``description`` instead of ``title``,
+    and non-canonical status spellings (coerced via ``_normalise_plan_status``).
+    Returns ``None`` only when the value cannot be read as a list at all.
+    """
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -133,7 +186,38 @@ def _coerce_plan_steps(value: Any) -> list[dict[str, Any]] | None:
             return None
     if not isinstance(value, list):
         return None
-    return [step for step in value if isinstance(step, dict)]
+    steps: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = (
+            item.get("title")
+            or item.get("step")
+            or item.get("name")
+            or item.get("description")
+        )
+        if title is None or not str(title).strip():
+            continue
+        steps.append(
+            {
+                "title": str(title),
+                "status": _normalise_plan_status(item.get("status")),
+            }
+        )
+    return steps
+
+
+def _plan_steps_from_args(args: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Resolve the steps array from update_plan arguments.
+
+    Accepts the canonical ``steps`` key and the common ``plan`` alias the model
+    sometimes emits (often as a JSON string), so a near-miss call still updates
+    the plan instead of silently erroring.
+    """
+    raw = args.get("steps")
+    if raw is None:
+        raw = args.get("plan")
+    return _coerce_plan_steps(raw)
 
 
 def _latest_plan(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
@@ -148,9 +232,8 @@ def _latest_plan(messages: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
                 args = json.loads(tc["function"].get("arguments") or "{}")
             except (KeyError, TypeError, json.JSONDecodeError):
                 continue
-            steps = args.get("steps")
-            coerced = _coerce_plan_steps(steps)
-            if coerced is not None:
+            coerced = _plan_steps_from_args(args)
+            if coerced:
                 return coerced
     return None
 
@@ -219,6 +302,19 @@ def _run_set_task_contract(arguments: dict[str, Any]) -> tuple[str, bool]:
     return json.dumps({"contract_set": True, **contract}, indent=2), False
 
 
+def _split_criteria_string(text: str) -> list[str]:
+    """Recover a list of success criteria from a single string.
+
+    Handles the two shapes the model commonly emits when it ignores the array
+    schema: ``<item>...</item>`` wrapped entries, and newline/semicolon
+    separated lines.
+    """
+    items = re.findall(r"<item>(.*?)</item>", text, re.IGNORECASE | re.DOTALL)
+    if not items:
+        items = re.split(r"[\n;]+", text)
+    return [stripped for stripped in (item.strip() for item in items) if stripped]
+
+
 def _normalise_task_contract(
     arguments: dict[str, Any],
 ) -> tuple[dict[str, Any], str | None]:
@@ -231,6 +327,11 @@ def _normalise_task_contract(
         return {}, "summary must be a non-empty string"
 
     raw_criteria = arguments.get("success_criteria")
+    if isinstance(raw_criteria, str):
+        # The model sometimes sends a single string (often wrapped in <item>
+        # tags or newline-separated) instead of a JSON array. Recover the items
+        # rather than rejecting the whole contract.
+        raw_criteria = _split_criteria_string(raw_criteria)
     if not isinstance(raw_criteria, list):
         return {}, "success_criteria must be an array of strings"
     success_criteria = [

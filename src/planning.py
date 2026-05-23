@@ -46,9 +46,9 @@ def _run_update_plan(arguments: dict[str, Any]) -> tuple[str, bool]:
     in history; this just validates the input and echoes a status line so the
     model gets confirmation of what it set.
     """
-    from contract import _coerce_plan_steps  # local import avoids top-level name clash
+    from contract import _plan_steps_from_args  # local import avoids name clash
 
-    steps = _coerce_plan_steps(arguments.get("steps"))
+    steps = _plan_steps_from_args(arguments)
     if not steps:
         return (
             "[update_plan error] Provide a non-empty 'steps' array, each item "
