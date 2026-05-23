@@ -132,19 +132,72 @@ class TestSystemDirectiveAntiSubstitution:
         # The canonical example of the failure should be called out by name.
         assert "react" in self._directive()
 
-    def test_directive_states_runtimes_preinstalled(self):
+    def test_directive_says_check_env_before_assuming_runtime(self):
+        """The directive must steer the agent to verify a runtime via
+        get_system_environment rather than blindly assuming it exists (the old
+        absolute 'pre-installed' promise was false on non-container hosts) or
+        blindly trying to apt-get install it (false on non-root containers)."""
         directive = self._directive()
-        assert "pre-installed" in directive or "already installed" in directive or (
-            "already" in directive and "installed" in directive
-        ), (
-            "SYSTEM_DIRECTIVE must tell the model the standard runtimes "
-            "(Node/npm, Python, Rust) are already installed so it stops trying "
-            "to apt-get install them."
+        assert "get_system_environment" in directive
+        assert "reinstall" in directive or "apt-get" in directive, (
+            "Directive must tell the agent not to reinstall a runtime that is "
+            "already present (prevents the apt-get-in-container loop)."
         )
 
     def test_directive_mentions_node_toolchain(self):
         directive = self._directive()
         assert "npm" in directive or "npx" in directive or "node.js" in directive
+
+
+# ---------------------------------------------------------------------------
+# Web-stack choice: default to vanilla HTML, don't over-reach for React, and
+# check the environment once instead of probing a missing runtime repeatedly.
+# These guard the third recurring failure: the agent scaffolded a React/Vite
+# project for a request that never mentioned React, hit a missing-Node wall on
+# the host, and burned its budget re-probing 'node --version' / 'npm --version'.
+# ---------------------------------------------------------------------------
+
+
+class TestSystemDirectiveStackChoice:
+    @staticmethod
+    def _directive() -> str:
+        from agent import SYSTEM_DIRECTIVE
+
+        return SYSTEM_DIRECTIVE.lower()
+
+    def test_defaults_to_vanilla_html_when_no_framework_named(self):
+        directive = self._directive()
+        assert "vanilla" in directive, (
+            "SYSTEM_DIRECTIVE must tell the agent to default to vanilla HTML/JS "
+            "for an unspecified 'interactive website', not a heavy toolchain."
+        )
+
+    def test_mentions_single_self_contained_html(self):
+        directive = self._directive()
+        assert "self-contained" in directive or "single index.html" in directive or (
+            "index.html" in directive and "no build" in directive
+        )
+
+    def test_reach_for_react_only_when_explicitly_named(self):
+        directive = self._directive()
+        assert "explicitly" in directive and "react" in directive, (
+            "Directive must restrict React/Vite to when the user explicitly names it."
+        )
+
+    def test_warns_against_scaffolding_unrequested_react(self):
+        directive = self._directive()
+        assert "did not ask" in directive or "never mentioned react" in directive
+
+    def test_check_environment_once_no_repeat_probe(self):
+        directive = self._directive()
+        assert "get_system_environment" in directive
+        assert "once" in directive
+
+    def test_does_not_falsely_promise_runtimes_preinstalled(self):
+        """The old absolute claim was false on non-container hosts and pushed the
+        agent into npm. The directive must not assert runtimes are always there."""
+        directive = self._directive()
+        assert "already installed system-wide" not in directive
 
 
 # ---------------------------------------------------------------------------
