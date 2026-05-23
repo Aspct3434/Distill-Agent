@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from evaluator import ExecutionStep
+from toolsets import TOOLSET_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -253,12 +254,18 @@ def _normalise_task_contract(
         if not evidence:
             return {}, "execute mode requires at least one non-'none' evidence requirement"
 
+    # Optional toolset selection — narrows available tools for subsequent iterations.
+    toolset = str(arguments.get("toolset", "all"))
+    if toolset not in TOOLSET_NAMES:
+        return {}, f"unknown toolset {toolset!r}; valid values: {sorted(TOOLSET_NAMES)}"
+
     return (
         {
             "mode": mode,
             "summary": summary,
             "success_criteria": success_criteria,
             "evidence_requirements": list(dict.fromkeys(evidence)),
+            "toolset": toolset,
         },
         None,
     )

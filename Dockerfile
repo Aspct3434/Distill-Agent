@@ -42,6 +42,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# ── Pre-install Playwright Chromium browser (system-wide) ─────────────────
+# We install the browser as root into a world-readable path so the non-root
+# `agent` user can use it without a per-user download on every container start.
+#
+# PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright — shared, not in ~ of any user
+# playwright install-deps chromium   — installs the OS packages Chromium needs
+# playwright install chromium        — downloads the browser binary itself
+# chmod a+rx                         — agent user can read/execute the binary
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright
+
+RUN playwright install-deps chromium \
+    && playwright install chromium \
+    && chmod -R a+rx /usr/local/ms-playwright
+
 # ── Pre-install Rust toolchain (system-wide) ───────────────────────────────
 # Install rustup/cargo/rustc into /usr/local/{rustup,cargo} so every user
 # (including the non-root `agent`) can compile Rust without a per-user download.

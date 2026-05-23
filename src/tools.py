@@ -234,7 +234,11 @@ SET_TASK_CONTRACT_TOOL: dict[str, Any] = {
         "Declare how the current user task must be completed before doing any "
         "work. Use mode='answer' for pure Q&A and mode='execute' for tasks that "
         "must change files, services, databases, or other host state. The engine "
-        "uses this contract to decide whether a final text answer is acceptable."
+        "uses this contract to decide whether a final text answer is acceptable. "
+        "Optionally specify toolset to narrow the tools available for this task: "
+        "'research' (web + read-only), 'coding' (files + terminal + web), "
+        "'web' (browser + fetch + files), 'data' (SQLite + terminal), "
+        "'ops' (shell + files), 'all' (everything, default)."
     ),
     "inputSchema": {
         "type": "object",
@@ -275,6 +279,16 @@ SET_TASK_CONTRACT_TOOL: dict[str, Any] = {
                 "description": (
                     "Structured proof the engine should require before accepting a "
                     "final answer. Use 'none' only for answer-mode tasks."
+                ),
+            },
+            "toolset": {
+                "type": "string",
+                "enum": ["all", "research", "coding", "web", "data", "ops"],
+                "description": (
+                    "Optional: narrow available tools to this category. "
+                    "research=web+read-only, coding=files+terminal+web, "
+                    "web=browser+fetch+files, data=SQLite+terminal, ops=shell+files. "
+                    "Default 'all'."
                 ),
             },
         },
@@ -551,6 +565,8 @@ class ToolManager:
             os.getenv("PUBLISHED_SITES_DIR", str(_PROJECT_ROOT / "published_sites"))
         ).expanduser()
         self.public_base_url = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+        # Lazy browser session — started on first browser_* tool call.
+        self._browser_session: _BrowserSession | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -637,6 +653,9 @@ class ToolManager:
         results.append(GET_FILESYSTEM_PROCESS_EVIDENCE_TOOL)
         results.append(WEB_FETCH_TOOL)
         results.append(WEB_SEARCH_TOOL)
+        # Browser tools only appear when Playwright is installed.
+        if _PLAYWRIGHT_AVAILABLE:
+            results.extend(_BROWSER_TOOL_SCHEMAS)
         results.append(WRITE_TEXT_FILE_TOOL)
         results.append(SET_TASK_CONTRACT_TOOL)
         results.append(PUBLISH_STATIC_SITE_TOOL)
@@ -1221,9 +1240,54 @@ class ToolManager:
         await self._disconnect(name)
 
     async def close(self) -> None:
-        """Shut down all connected servers."""
+        """Shut down all connected servers and the browser session (if open)."""
         for name in list(self._stacks):
             await self._disconnect(name)
+        if self._browser_session is not None:
+            await self._browser_session.close()
+            self._browser_session = None
+
+    # ------------------------------------------------------------------
+    # Browser convenience methods (delegates to lazy _BrowserSession)
+    # ------------------------------------------------------------------
+
+    def _get_browser(self) -> _BrowserSession:
+        """Return the shared browser session, creating it if needed."""
+        if self._browser_session is None:
+            self._browser_session = _BrowserSession()
+        return self._browser_session
+
+    async def browser_navigate(self, url: str, timeout: float = 30.0) -> str:
+        """Navigate to *url* and return rendered text as JSON."""
+        result = await self._get_browser().navigate(url, timeout=timeout)
+        return json.dumps(result, indent=2)
+
+    async def browser_get_text(self, max_chars: int = 8_000) -> str:
+        """Return the current page's rendered text as JSON."""
+        result = await self._get_browser().get_text(max_chars=max_chars)
+        return json.dumps(result, indent=2)
+
+    async def browser_screenshot(self, path: str | None = None) -> str:
+        """Take a screenshot and return the save path as JSON."""
+        result = await self._get_browser().screenshot(path=path)
+        return json.dumps(result, indent=2)
+
+    async def browser_click(self, selector: str, timeout: float = 5.0) -> str:
+        """Click *selector* and return confirmation as JSON."""
+        result = await self._get_browser().click(selector, timeout=timeout)
+        return json.dumps(result, indent=2)
+
+    async def browser_fill(
+        self, selector: str, value: str, timeout: float = 5.0
+    ) -> str:
+        """Fill *selector* with *value* and return confirmation as JSON."""
+        result = await self._get_browser().fill(selector, value, timeout=timeout)
+        return json.dumps(result, indent=2)
+
+    async def browser_evaluate(self, expression: str) -> str:
+        """Evaluate a JS *expression* in the page and return result as JSON."""
+        result = await self._get_browser().evaluate(expression)
+        return json.dumps(result, indent=2)
 
     # ------------------------------------------------------------------
     # Async context manager
@@ -1662,6 +1726,309 @@ WEB_SEARCH_TOOL: dict[str, Any] = {
         "additionalProperties": False,
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Browser automation (Playwright)
+# ---------------------------------------------------------------------------
+
+# Whether playwright is importable — checked once at module load so the
+# browser tool schemas are conditionally included in list_all_tools().
+_PLAYWRIGHT_AVAILABLE: bool
+try:
+    import playwright  # noqa: F401
+    _PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    _PLAYWRIGHT_AVAILABLE = False
+
+
+class _BrowserSession:
+    """Lazy Playwright browser session shared across all browser tool calls.
+
+    A single Browser + BrowserContext + Page is created on the first
+    ``browser_navigate`` call and reused until :meth:`close` is called
+    (triggered by ``ToolManager.close()``).  All page operations are
+    sequential — there is no multi-tab support.
+    """
+
+    def __init__(self) -> None:
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._page: Any = None
+
+    async def _ensure_started(self) -> None:
+        if self._page is not None:
+            return
+        from playwright.async_api import async_playwright  # type: ignore[import-untyped]
+
+        self._playwright = await async_playwright().start()
+        self._browser = await self._playwright.chromium.launch(headless=True)
+        context = await self._browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+        self._page = await context.new_page()
+
+    async def navigate(self, url: str, timeout: float = 30.0) -> dict[str, Any]:
+        await self._ensure_started()
+        try:
+            await self._page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=int(timeout * 1000),
+            )
+        except Exception as exc:
+            return {"error": str(exc), "url": url}
+        return await self._page_snapshot()
+
+    async def get_text(self, max_chars: int = 8_000) -> dict[str, Any]:
+        await self._ensure_started()
+        snap = await self._page_snapshot(max_chars=max_chars)
+        return snap
+
+    async def screenshot(self, path: str | None = None) -> dict[str, Any]:
+        await self._ensure_started()
+        if path is None:
+            path = str(Path(tempfile.gettempdir()) / "agent_browser_screenshot.png")
+        try:
+            await self._page.screenshot(path=path, full_page=False)
+            return {
+                "saved_to": path,
+                "url": self._page.url,
+                "title": await self._page.title(),
+            }
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    async def click(self, selector: str, timeout: float = 5.0) -> dict[str, Any]:
+        await self._ensure_started()
+        try:
+            await self._page.click(selector, timeout=int(timeout * 1000))
+            await self._page.wait_for_load_state("domcontentloaded")
+            return {"clicked": selector, "url": self._page.url}
+        except Exception as exc:
+            return {"error": str(exc), "selector": selector}
+
+    async def fill(
+        self, selector: str, value: str, timeout: float = 5.0
+    ) -> dict[str, Any]:
+        await self._ensure_started()
+        try:
+            await self._page.fill(selector, value, timeout=int(timeout * 1000))
+            return {"filled": True, "selector": selector}
+        except Exception as exc:
+            return {"error": str(exc), "selector": selector}
+
+    async def evaluate(self, expression: str) -> dict[str, Any]:
+        await self._ensure_started()
+        try:
+            result = await self._page.evaluate(expression)
+            return {"result": result, "url": self._page.url}
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    async def close(self) -> None:
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+        self._page = None
+        self._browser = None
+        self._playwright = None
+
+    # ------------------------------------------------------------------
+    async def _page_snapshot(self, max_chars: int = 8_000) -> dict[str, Any]:
+        """Extract readable text from the current page via JavaScript."""
+        try:
+            raw: str = await self._page.evaluate(
+                """() => {
+                    const clone = document.documentElement.cloneNode(true);
+                    for (const el of clone.querySelectorAll(
+                            'script,style,noscript,svg,head')) {
+                        el.remove();
+                    }
+                    return (clone.innerText || clone.textContent || '').trim();
+                }"""
+            )
+        except Exception as exc:
+            raw = f"[JS evaluation error: {exc}]"
+
+        text = re.sub(r"\n{3,}", "\n\n", raw).strip()
+        total = len(text)
+        return {
+            "url": self._page.url,
+            "title": await self._page.title(),
+            "text": text[:max_chars],
+            "word_count": len(text.split()),
+            "truncated": total > max_chars,
+            "total_chars": total,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Browser tool schemas
+# ---------------------------------------------------------------------------
+
+BROWSER_NAVIGATE_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "browser_navigate",
+    "description": (
+        "Open a URL in a real headless Chromium browser and return the "
+        "rendered page text and title. Unlike web_fetch, this executes "
+        "JavaScript so single-page apps, login-gated pages, and "
+        "dynamically loaded content are fully rendered. "
+        "Use browser_navigate for JS-heavy sites; use web_fetch for "
+        "static pages and APIs (faster). "
+        "Returns: url, title, text (rendered), word_count, truncated."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+            "url": {"type": "string", "description": "URL to navigate to."},
+            "timeout": {
+                "type": "number",
+                "description": "Page load timeout in seconds (1-120). Default 30.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+BROWSER_GET_TEXT_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "browser_get_text",
+    "description": (
+        "Return the rendered text of the browser's current page without "
+        "reloading. Call after browser_navigate, browser_click, or "
+        "browser_fill to read the updated content."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "max_chars": {
+                "type": "integer",
+                "description": "Max characters to return (100-40000). Default 8000.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+BROWSER_SCREENSHOT_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "browser_screenshot",
+    "description": (
+        "Take a screenshot of the browser's current page and save it to a "
+        "file. Returns the file path and current URL. Useful for verifying "
+        "visual state or capturing evidence."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "File path to save the PNG. Defaults to a temp file.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+BROWSER_CLICK_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "browser_click",
+    "description": (
+        "Click an element on the current browser page using a CSS selector. "
+        "Waits for the page to settle after the click. "
+        "Use browser_get_text afterwards to read updated content."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["selector"],
+        "properties": {
+            "selector": {
+                "type": "string",
+                "description": "CSS selector of the element to click.",
+            },
+            "timeout": {
+                "type": "number",
+                "description": "Timeout in seconds. Default 5.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+BROWSER_FILL_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "browser_fill",
+    "description": (
+        "Fill an input or textarea with a value using a CSS selector. "
+        "Clears the current value first, then types the new one. "
+        "Use browser_click to submit the form afterwards."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["selector", "value"],
+        "properties": {
+            "selector": {
+                "type": "string",
+                "description": "CSS selector of the input element.",
+            },
+            "value": {
+                "type": "string",
+                "description": "Text to fill into the element.",
+            },
+            "timeout": {
+                "type": "number",
+                "description": "Timeout in seconds. Default 5.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+BROWSER_EVALUATE_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "browser_evaluate",
+    "description": (
+        "Execute a JavaScript expression in the browser page context and "
+        "return the result. Use to extract data from DOM elements, trigger "
+        "JS events, read page variables, or call page APIs. "
+        "Example: \"document.querySelector('#price').textContent\""
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["expression"],
+        "properties": {
+            "expression": {
+                "type": "string",
+                "description": "JavaScript expression to evaluate in the page context.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+# Collected for conditional inclusion in list_all_tools()
+_BROWSER_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    BROWSER_NAVIGATE_TOOL,
+    BROWSER_GET_TEXT_TOOL,
+    BROWSER_SCREENSHOT_TOOL,
+    BROWSER_CLICK_TOOL,
+    BROWSER_FILL_TOOL,
+    BROWSER_EVALUATE_TOOL,
+]
 
 
 # ---------------------------------------------------------------------------

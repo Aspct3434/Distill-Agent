@@ -54,6 +54,7 @@ from planning import (
     _store_iteration_cap_memory,
 )
 from tools import ToolManager
+from toolsets import filter_tools_by_toolset
 
 logger = logging.getLogger(__name__)
 
@@ -626,7 +627,18 @@ class AgentEngine:
                 )
                 completion_kwargs["model"] = active_model
                 request_messages = self._compact_context_window(messages)
-                request_tool_schemas = tool_schemas
+
+                # Apply toolset filtering: narrow the tool list to only what is
+                # relevant for the declared task category.  Falls back to "all"
+                # when no toolset is declared or when the contract forces a specific
+                # sub-set (contract filtering takes priority in that branch).
+                active_toolset = (contract or {}).get("toolset", "all")
+                toolset_filtered = _to_litellm_tools(
+                    filter_tools_by_toolset(all_tools, active_toolset)
+                )
+                if toolset_filtered and self._caching_enabled:
+                    toolset_filtered[-1]["cache_control"] = {"type": "ephemeral"}
+                request_tool_schemas = toolset_filtered
                 if must_set_contract:
                     request_messages = [
                         *request_messages,
@@ -1137,6 +1149,43 @@ class AgentEngine:
             except Exception as exc:
                 logger.warning("web_search raised: %s", exc)
                 return f"[web_search error] {exc}", True, "__builtin__"
+        # Browser tools — stateful, run serially (not in _PARALLEL_SAFE_TOOLS)
+        if tool_name == "browser_navigate":
+            try:
+                return await self._tools.browser_navigate(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("browser_navigate raised: %s", exc)
+                return f"[browser_navigate error] {exc}", True, "__builtin__"
+        if tool_name == "browser_get_text":
+            try:
+                return await self._tools.browser_get_text(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("browser_get_text raised: %s", exc)
+                return f"[browser_get_text error] {exc}", True, "__builtin__"
+        if tool_name == "browser_screenshot":
+            try:
+                return await self._tools.browser_screenshot(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("browser_screenshot raised: %s", exc)
+                return f"[browser_screenshot error] {exc}", True, "__builtin__"
+        if tool_name == "browser_click":
+            try:
+                return await self._tools.browser_click(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("browser_click raised: %s", exc)
+                return f"[browser_click error] {exc}", True, "__builtin__"
+        if tool_name == "browser_fill":
+            try:
+                return await self._tools.browser_fill(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("browser_fill raised: %s", exc)
+                return f"[browser_fill error] {exc}", True, "__builtin__"
+        if tool_name == "browser_evaluate":
+            try:
+                return await self._tools.browser_evaluate(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("browser_evaluate raised: %s", exc)
+                return f"[browser_evaluate error] {exc}", True, "__builtin__"
         if tool_name == "get_filesystem_process_evidence":
             try:
                 return (

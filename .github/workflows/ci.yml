@@ -29,7 +29,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install fastapi mcp-server-sqlite aiosqlite httpx litellm pydantic \
-                      pytest pytest-asyncio pytest-cov hypothesis
+                      pytest pytest-asyncio pytest-cov hypothesis \
+                      duckduckgo-search playwright
+
+      - name: Install Playwright Chromium browser
+        run: playwright install chromium --with-deps
+        # Installs the Chromium binary + its OS-level dependencies.
+        # Browser integration tests in test_browser_tools.py are skipped when
+        # the binary is absent, so a failure here is non-fatal in CI.
+        continue-on-error: true
 
       - name: Verify all source files parse (encoding check)
         run: |
@@ -62,6 +70,8 @@ jobs:
                  tests/test_coverage_boost.py \
                  tests/test_property.py \
                  tests/test_rust_server_scenario.py \
+                 tests/test_toolsets.py \
+                 tests/test_browser_tools.py \
                  -v --tb=short
         env:
           PYTHONPATH: src
