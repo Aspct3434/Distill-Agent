@@ -635,6 +635,8 @@ class ToolManager:
 
         results.append(GET_SYSTEM_ENVIRONMENT_TOOL)
         results.append(GET_FILESYSTEM_PROCESS_EVIDENCE_TOOL)
+        results.append(WEB_FETCH_TOOL)
+        results.append(WEB_SEARCH_TOOL)
         results.append(WRITE_TEXT_FILE_TOOL)
         results.append(SET_TASK_CONTRACT_TOOL)
         results.append(PUBLISH_STATIC_SITE_TOOL)
@@ -722,6 +724,151 @@ class ToolManager:
     def get_system_environment(self) -> str:
         """Return the cached JSON environment snapshot collected at init time."""
         return self._env_snapshot
+
+    async def web_fetch(
+        self,
+        url: str,
+        max_chars: int = 8_000,
+        timeout: float = 15.0,
+    ) -> str:
+        """Fetch *url* and return readable text + metadata as JSON.
+
+        HTML is stripped to plain text via :func:`_html_to_text`.  JSON and
+        plain-text responses are returned as-is.  The result is always valid
+        JSON with keys: url, status_code, content_type, text, word_count,
+        truncated, total_chars.
+
+        Requires ``httpx`` (already in requirements).
+        """
+        import httpx as _httpx
+
+        max_chars = min(max(100, int(max_chars)), 40_000)
+        timeout = min(max(1.0, float(timeout)), 60.0)
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64; compatible; agent-ai/1.0)"
+            ),
+            "Accept": (
+                "text/html,application/xhtml+xml,application/xml;"
+                "q=0.9,text/plain;q=0.8,*/*;q=0.5"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        try:
+            async with _httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=_httpx.Timeout(timeout),
+            ) as client:
+                response = await client.get(url, headers=headers)
+        except _httpx.TimeoutException:
+            return json.dumps({
+                "error": f"Request timed out after {timeout}s",
+                "url": url,
+            }, indent=2)
+        except _httpx.RequestError as exc:
+            return json.dumps({"error": f"Request failed: {exc}", "url": url}, indent=2)
+
+        content_type = response.headers.get("content-type", "").lower()
+        raw = response.text
+
+        if "html" in content_type or raw.lstrip().lower().startswith("<!"):
+            text = _html_to_text(raw)
+        else:
+            text = raw
+
+        total_chars = len(text)
+        return json.dumps(
+            {
+                "url": str(response.url),
+                "status_code": response.status_code,
+                "content_type": content_type,
+                "text": text[:max_chars],
+                "word_count": len(text.split()),
+                "truncated": total_chars > max_chars,
+                "total_chars": total_chars,
+            },
+            indent=2,
+        )
+
+    async def web_search(self, query: str, max_results: int = 8) -> str:
+        """Search the web and return result titles, URLs, and snippets as JSON.
+
+        Backend priority:
+        1. ``duckduckgo_search`` library (optional install — best quality).
+        2. DuckDuckGo HTML Lite scrape via ``httpx`` (no extra dependencies).
+        3. Graceful error JSON with a hint to use ``web_fetch`` directly.
+
+        Returns JSON with keys: query, backend, results[].
+        Each result has: title, url, snippet.
+        """
+        import urllib.parse
+
+        max_results = min(max(1, int(max_results)), 20)
+
+        # ── Backend 1: duckduckgo_search library ────────────────────────────
+        try:
+            from duckduckgo_search import DDGS  # type: ignore[import-untyped]
+
+            raw = await asyncio.to_thread(
+                lambda: list(DDGS().text(query, max_results=max_results))
+            )
+            results = [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                }
+                for r in raw
+            ]
+            return json.dumps(
+                {"query": query, "backend": "duckduckgo", "results": results},
+                indent=2,
+            )
+        except ImportError:
+            pass  # library not installed — fall through to HTML scrape
+        except Exception as exc:
+            logger.warning("duckduckgo_search backend failed: %s", exc)
+
+        # ── Backend 2: DuckDuckGo HTML Lite via httpx ────────────────────────
+        try:
+            import httpx as _httpx
+
+            encoded = urllib.parse.quote_plus(query)
+            ddg_url = f"https://html.duckduckgo.com/html/?q={encoded}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; agent-ai/1.0)",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            async with _httpx.AsyncClient(
+                follow_redirects=True, timeout=_httpx.Timeout(15.0)
+            ) as client:
+                resp = await client.get(ddg_url, headers=headers)
+            results = _parse_ddg_html(resp.text, max_results)
+            return json.dumps(
+                {"query": query, "backend": "duckduckgo_html", "results": results},
+                indent=2,
+            )
+        except Exception as exc:
+            logger.warning("DuckDuckGo HTML fallback also failed: %s", exc)
+
+        # ── Backend 3: graceful degradation ──────────────────────────────────
+        hint = (
+            "https://html.duckduckgo.com/html/?q="
+            + urllib.parse.quote_plus(query)
+        )
+        return json.dumps(
+            {
+                "query": query,
+                "backend": "unavailable",
+                "error": (
+                    "All web search backends failed. "
+                    f"Use web_fetch(url='{hint}') as an alternative."
+                ),
+                "results": [],
+            },
+            indent=2,
+        )
 
     def get_filesystem_process_evidence(
         self,
@@ -1364,6 +1511,157 @@ def _tail_file(raw_path: str, max_bytes: int = 4000) -> dict[str, Any]:
     except OSError as exc:
         info["error"] = str(exc)
     return info
+
+
+# ---------------------------------------------------------------------------
+# Web helpers (used by web_fetch and web_search)
+# ---------------------------------------------------------------------------
+
+def _html_to_text(html: str) -> str:
+    """Convert HTML to readable plain text — no external dependency required.
+
+    Strips non-content blocks (script/style/head), replaces block-level
+    elements with newlines, removes all remaining tags, decodes common HTML
+    entities, and collapses whitespace.
+    """
+    # Remove non-content blocks wholesale
+    html = re.sub(
+        r"<(script|style|noscript|svg|head)[^>]*>.*?</\1>",
+        "",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Block-level elements become line breaks so paragraph structure survives
+    html = re.sub(
+        r"</?(br|p|div|h[1-6]|li|tr|td|th|blockquote|pre|article|"
+        r"section|header|footer|nav|main|aside)[^>]*>",
+        "\n",
+        html,
+        flags=re.IGNORECASE,
+    )
+    # Strip all remaining HTML tags
+    html = re.sub(r"<[^>]+>", "", html)
+    # Decode named entities
+    for entity, char in [
+        ("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+        ("&quot;", '"'), ("&#39;", "'"), ("&apos;", "'"),
+    ]:
+        html = html.replace(entity, char)
+    # Decode numeric entities (hex: &#x27; and decimal: &#39;)
+    html = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)), html)
+    html = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), html)
+    # Tidy whitespace
+    html = re.sub(r"[ \t]+", " ", html)
+    html = re.sub(r"\n[ \t]+", "\n", html)
+    html = re.sub(r"\n{3,}", "\n\n", html)
+    return html.strip()
+
+
+def _decode_entities(text: str) -> str:
+    """Decode common HTML entities in a short string (title / snippet)."""
+    for entity, char in [
+        ("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+        ("&quot;", '"'), ("&#39;", "'"), ("&apos;", "'"),
+    ]:
+        text = text.replace(entity, char)
+    # Hex entities: &#x27; → '
+    text = re.sub(r"&#x([0-9a-fA-F]+);", lambda m: chr(int(m.group(1), 16)), text)
+    # Decimal entities: &#39; → '
+    text = re.sub(r"&#(\d+);", lambda m: chr(int(m.group(1))), text)
+    return text
+
+
+def _parse_ddg_html(html: str, max_results: int = 8) -> list[dict[str, str]]:
+    """Extract result title/url/snippet from a DuckDuckGo HTML Lite response."""
+    results: list[dict[str, str]] = []
+    # DuckDuckGo Lite marks result links with class="result__a"
+    title_pat = re.compile(
+        r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    snippet_pat = re.compile(
+        r'class="result__snippet[^"]*"[^>]*>(.*?)</(?:a|span)>',
+        re.DOTALL | re.IGNORECASE,
+    )
+    titles = title_pat.findall(html)
+    snippets = [
+        _decode_entities(re.sub(r"<[^>]+>", "", s)).strip()
+        for s in snippet_pat.findall(html)
+    ]
+    for i, (url, title) in enumerate(titles[:max_results]):
+        results.append({
+            "title": _decode_entities(re.sub(r"<[^>]+>", "", title)).strip(),
+            "url": url,
+            "snippet": snippets[i] if i < len(snippets) else "",
+        })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Web tool schemas
+# ---------------------------------------------------------------------------
+
+WEB_FETCH_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "web_fetch",
+    "description": (
+        "Fetch any public URL and return its readable text plus metadata. "
+        "HTML is automatically converted to clean text (scripts, styles, and "
+        "markup stripped). JSON and plain text are returned as-is. "
+        "Use this to read documentation, API responses, GitHub files, news "
+        "articles, search-result pages, or any web resource. "
+        "The text is truncated at max_chars (default 8 000); raise it for "
+        "long technical documents. Returns: url, status_code, content_type, "
+        "text, word_count, truncated, total_chars."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The URL to fetch (http:// or https://).",
+            },
+            "max_chars": {
+                "type": "integer",
+                "description": "Max characters of body text to return (100-40000). Default 8000.",
+            },
+            "timeout": {
+                "type": "number",
+                "description": "Request timeout in seconds (1-60). Default 15.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+WEB_SEARCH_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "web_search",
+    "description": (
+        "Search the web and return result titles, URLs, and snippets. "
+        "Use this to find information, look up documentation, research a topic, "
+        "or locate solutions to errors — without writing a custom skill. "
+        "Follow up with web_fetch on the most relevant URLs to read full content. "
+        "Typical pattern: web_search → pick top URLs → web_fetch each one → synthesise. "
+        "Returns: query, backend, results[] with title/url/snippet."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The search query string.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Number of results to return (1-20). Default 8.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
 
 
 # ---------------------------------------------------------------------------

@@ -133,9 +133,13 @@ _PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset(
     {
         "get_system_environment",
         "get_filesystem_process_evidence",
+        # Web tools are read-only network calls — safe to run concurrently
+        "web_fetch",
+        "web_search",
         "expand_tool_output",
         "set_task_contract",
         "update_plan",
+        # MCP filesystem server (read-only ops)
         "list_tables",
         "describe_table",
         "read_query",
@@ -169,6 +173,7 @@ SYSTEM_DIRECTIVE = (
     "Instead, proactively use your tools: inspect the database schema, check the "
     "ChromaDB memory state, or look at the skills directory, and report a highly "
     "technical summary of the system state. Act immediately. Execute silently. "
+    # ── Task contract ────────────────────────────────────────────────────────
     "For every new user task, your FIRST tool call is set_task_contract. Use it to "
     "declare whether the task is a pure text answer or requires real host-side "
     "execution evidence. For any execute-mode task that needs more than one step, "
@@ -178,6 +183,19 @@ SYSTEM_DIRECTIVE = (
     "the plan in sync with what has actually happened, use it to avoid repeating "
     "steps that are already done, and do not give a final answer until every step "
     "is 'done' or 'failed'. "
+    # ── Web tools ────────────────────────────────────────────────────────────
+    "You have two web tools that make you general-purpose without custom skills: "
+    "web_search and web_fetch. Use them freely. "
+    "web_search: find information, look up docs, research a topic, locate solutions "
+    "to errors. Returns titles + URLs + snippets. "
+    "web_fetch: read any URL — documentation, GitHub files, API endpoints, search "
+    "results, news, technical specs. Returns clean readable text. "
+    "Standard research pattern: web_search to find candidate URLs, then web_fetch "
+    "the most relevant ones to read the full content, then synthesise your answer. "
+    "NEVER write a custom skill just to do web research — use these tools directly. "
+    "When you encounter an error (build failure, missing dependency, unfamiliar API), "
+    "web_search the error message before assuming you need a custom workaround. "
+    # ── Terminal ─────────────────────────────────────────────────────────────
     "You have root access to a terminal shell tool. If the user requests an "
     "installation, setup, or file-system operation, DO NOT explain how the user "
     "can do it manually. Immediately use execute_terminal_command or "
@@ -214,6 +232,7 @@ SYSTEM_DIRECTIVE = (
     "never repeat a step already listed under Completed_Actions in the executive "
     "summary; build on finished work and respect ordering (do not start a service "
     "before its prerequisites are installed and in place). "
+    # ── Content generation ───────────────────────────────────────────────────
     "When asked to produce content (a website, a document, sample data, copy), "
     "generate complete, realistic content yourself -- do NOT ask the user what to "
     "include or leave placeholder text unless they explicitly request a skeleton. "
@@ -228,6 +247,7 @@ SYSTEM_DIRECTIVE = (
     "browser UI on an internal container port, call expose_local_http_service after "
     "the service is listening and give the returned /proxy URL. Do not ask the user "
     "to manually open ports or edit Docker Compose for normal HTTP access. "
+    # ── Output format ────────────────────────────────────────────────────────
     "Final answers must use clear GitHub-flavored Markdown. Use bold section labels "
     "and concise bullets when helpful. Include one to three relevant emoji characters "
     "in user-facing status summaries, but keep the tone professional and do not "
@@ -1105,6 +1125,18 @@ class AgentEngine:
                 return f"[execute_background_service error] {exc}", True, "__builtin__"
         if tool_name == "get_system_environment":
             return self._tools.get_system_environment(), False, "__builtin__"
+        if tool_name == "web_fetch":
+            try:
+                return await self._tools.web_fetch(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("web_fetch raised: %s", exc)
+                return f"[web_fetch error] {exc}", True, "__builtin__"
+        if tool_name == "web_search":
+            try:
+                return await self._tools.web_search(**arguments), False, "__builtin__"
+            except Exception as exc:
+                logger.warning("web_search raised: %s", exc)
+                return f"[web_search error] {exc}", True, "__builtin__"
         if tool_name == "get_filesystem_process_evidence":
             try:
                 return (
