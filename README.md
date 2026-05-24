@@ -39,7 +39,7 @@ The premium installer is the npm onboarding CLI:
 npx @aspct3434/agent-ai install
 ```
 
-It opens an OpenClaw-style terminal onboarding flow with an Agent AI banner, a security warning, QuickStart/manual setup modes, model-provider setup, sandbox choice, messaging-app setup, startup, and health-check guidance.
+It opens an OpenClaw-style terminal onboarding flow with an Agent AI banner, a security warning, QuickStart/manual setup modes, model-provider/API-key setup, sandbox choice, messaging-app setup, startup, and health-check guidance.
 
 After install, manage the app with `npx`:
 
