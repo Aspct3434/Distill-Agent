@@ -61,6 +61,7 @@ desktop.ini
 .coverage
 coverage.xml
 htmlcov/
+.pytest-tmp/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

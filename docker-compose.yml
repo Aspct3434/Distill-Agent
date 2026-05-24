@@ -3,7 +3,7 @@ services:
     build:
       context: .
     env_file:
-      - an-api.env
+      - ${AGENT_ENV_FILE:-an-api.env}
     ports:
       - "8000:8000"
     environment:
@@ -16,6 +16,8 @@ services:
       CHECKPOINT_DB_PATH: /app/data/checkpoints.db
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
       AGENT_WORKDIR: /app/workspace
+      AGENT_SANDBOX: ${AGENT_SANDBOX:-}
+      AGENT_SANDBOX_HOST_FALLBACK: ${AGENT_SANDBOX_HOST_FALLBACK:-false}
       AGENT_MAX_REACT_ITERATIONS: ${AGENT_MAX_REACT_ITERATIONS:-16}
       AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-32768}
       AGENT_RATE_LIMIT_RETRIES: ${AGENT_RATE_LIMIT_RETRIES:-2}
@@ -52,6 +54,16 @@ services:
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
+
+  control_panel:
+    build:
+      context: ./control-panel
+    ports:
+      - "5173:80"
+    depends_on:
+      - agent_core
+    networks:
+      - agent_internal
 
   neo4j:
     image: neo4j:5-community

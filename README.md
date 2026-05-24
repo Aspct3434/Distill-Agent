@@ -31,22 +31,67 @@ tests/              -- Pytest suite (scripted streaming model, contract tests)
 
 **Prompt caching** â€” system directive + tool schemas carry `cache_control: ephemeral` breakpoints; fast/strong model tiers share the same provider so cache hits apply across escalations.
 
-## Quick start
+## One-click install
+
+For a fresh machine with no project files yet, use the bootstrap installer. Replace `<owner>/<repo>` once this repository is published:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh | bash
+```
+
+Until a public repository URL exists, pass it explicitly:
+
+```powershell
+& ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.ps1))) -RepoUrl "https://github.com/<owner>/<repo>.git"
+```
+
+The bootstrap checks prerequisites, clones the repo to `%USERPROFILE%\agent-ai` on Windows or `~/agent-ai` on Bash, then runs the interactive installer.
+
+From an existing local clone, run the second-stage installer directly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+```
+
+```bash
+bash scripts/install.sh
+```
+
+The installer asks for your model provider, sandbox mode, and messaging app. It writes `an-api.env`, backs up an existing env file before changing managed keys, and starts the full app.
+
+Sandbox choices:
+
+- `Sandbox on` uses Docker Compose container isolation and starts the backend, Neo4j, and control panel.
+- `Sandbox off` starts the backend and control panel directly on the host under `.run-venv` and `control-panel/node_modules`.
+
+Smoke checks after install:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Open `http://localhost:5173` for the chat UI and `http://localhost:8000/docs` for the API docs.
+
+## Manual quick start
 
 ```bash
 # Copy and fill in your Kimi / Moonshot API key
 cp an-api.env.example an-api.env
 
-# Run with Docker (recommended: correct POSIX shell, isolated filesystem)
-docker compose up
+# Run with Docker Compose (recommended)
+docker compose up -d --build
 
-# Local development still routes agent execution into Docker.
+# Local development can still route agent execution into Docker.
 pip install -r requirements.txt
 AGENT_SANDBOX=docker AGENT_SANDBOX_HOST_FALLBACK=false \
 uvicorn gateway:app --app-dir src --reload
 ```
 
-Open `http://localhost:8000` for the API. Open `control-panel/` for the chat UI (`npm run dev`).
+Open `http://localhost:8000` for the API. Docker Compose serves the chat UI at `http://localhost:5173`; local frontend development still uses `control-panel/` with `npm run dev`.
 
 ## Environment variables
 
@@ -59,6 +104,8 @@ Open `http://localhost:8000` for the API. Open `control-panel/` for the chat UI 
 | `STRONG_AGENT_MODEL` | `AGENT_MODEL` | Escalated iterations / sub-agents |
 | `AGENT_MAX_REACT_ITERATIONS` | `16` | Q&A iteration cap |
 | `AGENT_ACTION_MAX_REACT_ITERATIONS` | `30` | Execution iteration cap |
+| `AGENT_SANDBOX` | blank | Leave blank for Docker Compose container isolation; set `docker` only when running the backend directly on a host and you want nested Docker execution. |
+| `AGENT_SANDBOX_HOST_FALLBACK` | `false` | Allow direct host execution if a requested sandbox fails. The installer sets this to `true` only for sandbox-off host mode. |
 | `AGENT_USE_HYBRID_MEMORY` | `true` | Enable ChromaDB + Neo4j memory |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j (optional; falls back to Chroma-only) |
 
@@ -72,4 +119,4 @@ pytest --self-test src/eval_harness.py       # harness self-test (no API key nee
 
 ## Windows development
 
-For local development on Windows, keep `AGENT_SANDBOX=docker` and `AGENT_SANDBOX_HOST_FALLBACK=false` so agent tasks execute inside the Docker sandbox instead of the host shell. Docker is the recommended runtime on Windows.
+For one-click installs on Windows, use the PowerShell bootstrap/installer and keep `Sandbox on` for Docker Compose container isolation. If you run `uvicorn` directly on Windows instead of Compose, set `AGENT_SANDBOX=docker` and `AGENT_SANDBOX_HOST_FALLBACK=false` so agent tasks execute inside Docker rather than the host shell.
