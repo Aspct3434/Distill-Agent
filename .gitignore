@@ -70,6 +70,7 @@ htmlcov/
 control-panel/node_modules/
 control-panel/dist/
 control-panel/.vite/
+.npm-cache/
 
 # ── Runtime skill volume (agent-generated; not source) ───────────────────
 # src/builtin_skills/ IS committed; the writable skills/ volume is not.
