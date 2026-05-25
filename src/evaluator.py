@@ -8,10 +8,12 @@ tool calls, non-trivial prompt) are submitted for synthesis.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -287,6 +289,23 @@ def _validate_python_syntax(code: str) -> bool:
         return False
 
 
+def _skill_function_names(code: str) -> set[str]:
+    """Return the names of top-level functions defined in *code*.
+
+    Used to guarantee a self-improvement candidate preserves the skill's
+    public function(s), so callers and the MCP server don't break.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+
+
 _TRIVIAL_PROMPTS: frozenset[str] = frozenset(
     {
         "hi", "hello", "hey", "yo", "sup", "hiya",
@@ -371,6 +390,12 @@ class SkillRegistry:
         self._skills_dir = Path(skills_dir)
         self._model = model
         self._improve_after_uses = improve_after_uses
+        # Evidence-gated evolution thresholds (unique to agent-ai):
+        # also improve after repeated failures, and roll a promoted version
+        # back if it measurably regresses against its predecessor.
+        self._improve_after_failures = int(os.getenv("SKILL_IMPROVE_AFTER_FAILURES", "2"))
+        self._rollback_min_samples = int(os.getenv("SKILL_ROLLBACK_MIN_SAMPLES", "4"))
+        self._rollback_margin = float(os.getenv("SKILL_ROLLBACK_MARGIN", "0.15"))
         self._stats_file = self._skills_dir / "_registry.json"
         self._stats: dict[str, Any] = self._load_stats()
 
@@ -405,7 +430,7 @@ class SkillRegistry:
         return skills
 
     def record_use(self, skill_name: str, *, success: bool) -> None:
-        """Record one invocation of *skill_name*."""
+        """Record one invocation of *skill_name* (overall + per-version)."""
         s = self._stats.setdefault(skill_name, {
             "use_count": 0, "success_count": 0, "version": 1,
             "usage_log": [], "last_used": None, "improved_at": None,
@@ -413,9 +438,17 @@ class SkillRegistry:
         s["use_count"] += 1
         if success:
             s["success_count"] += 1
+        else:
+            s["failures_since_improve"] = s.get("failures_since_improve", 0) + 1
         s["last_used"] = datetime.now(UTC).isoformat()
         total = s["use_count"]
         s["success_rate"] = s["success_count"] / total if total else 1.0
+        # Per-version metrics power the evidence-gated rollback decision.
+        version = str(s.get("version", 1))
+        vstats = s.setdefault("versions", {}).setdefault(version, {"uses": 0, "successes": 0})
+        vstats["uses"] += 1
+        if success:
+            vstats["successes"] += 1
         self._save_stats()
 
     def record_use_example(self, skill_name: str, task: str, outcome: str) -> None:
@@ -426,20 +459,46 @@ class SkillRegistry:
             s["usage_log"] = log[-20:]
         self._save_stats()
 
-    async def maybe_improve(self, skill_name: str) -> bool:
-        """Trigger LLM-based self-improvement if the skill has matured.
+    async def maybe_evolve(self, skill_name: str) -> str:
+        """Evidence-gated evolution step. Returns the action taken.
 
-        Returns True when an improved version was written.
+        This is the public trigger the engine calls after a skill runs. Unlike
+        Hermes (which overwrites a skill on use), agent-ai:
+          1. rolls back first if the current version has measurably regressed
+             against its predecessor (auto-repair of a bad improvement), then
+          2. synthesises an improvement — but only *promotes* it if it passes a
+             validation gate (valid Python, keeps @skill, preserves the public
+             function), archiving the prior version so a regression is reversible.
+
+        Returns one of: ``"rolled_back"``, ``"improved"``, ``"unchanged"``.
+        """
+        if self.maybe_rollback(skill_name):
+            return "rolled_back"
+        if await self.maybe_improve(skill_name):
+            return "improved"
+        return "unchanged"
+
+    async def maybe_improve(self, skill_name: str) -> bool:
+        """Synthesise + evidence-gate a new skill version. Returns True if promoted.
+
+        Triggers when the skill matures (``improve_after_uses`` new uses) OR has
+        accumulated repeated failures since the last improvement. A candidate is
+        promoted only if it passes :meth:`_validate_candidate`; the prior version
+        is archived under ``.versions/`` for rollback.
         """
         if self._model is None:
             return False
         s = self._stats.get(skill_name, {})
         use_count = s.get("use_count", 0)
         last_improved_count = s.get("improved_at_count", 0)
+        failures = s.get("failures_since_improve", 0)
 
-        if use_count < self._improve_after_uses:
-            return False
-        if use_count - last_improved_count < self._improve_after_uses:
+        matured = (
+            use_count >= self._improve_after_uses
+            and use_count - last_improved_count >= self._improve_after_uses
+        )
+        failing = failures >= self._improve_after_failures
+        if not (matured or failing):
             return False
 
         skill_file = self._skills_dir / f"{skill_name}.py"
@@ -458,22 +517,135 @@ class SkillRegistry:
         if not improved:
             return False
 
-        # Backup the old version
+        ok, reason = self._validate_candidate(original_code, improved)
+        if not ok:
+            logger.info("Rejected self-improvement for %s: %s", skill_name, reason)
+            return False
+
         version = s.get("version", 1)
-        backup = self._skills_dir / f"{skill_name}_v{version}.py.bak"
+        self._archive_version(skill_name, version, original_code)
         try:
-            backup.write_text(original_code, encoding="utf-8")
             skill_file.write_text(improved, encoding="utf-8")
         except OSError as exc:
             logger.warning("Could not write improved skill %s: %s", skill_name, exc)
             return False
 
-        s["version"] = version + 1
+        new_version = version + 1
+        s["version"] = new_version
         s["improved_at"] = datetime.now(UTC).isoformat()
         s["improved_at_count"] = use_count
+        s["failures_since_improve"] = 0
+        s.setdefault("versions", {})[str(new_version)] = {"uses": 0, "successes": 0}
         self._save_stats()
-        logger.info("Skill %s improved to version %d", skill_name, version + 1)
+        logger.info("Skill %s improved to version %d (gate passed)", skill_name, new_version)
         return True
+
+    def maybe_rollback(self, skill_name: str) -> bool:
+        """Roll back to the previous version if the current one regressed.
+
+        Evidence-based: only fires once the current version has at least
+        ``rollback_min_samples`` uses and its success rate is more than
+        ``rollback_margin`` below the predecessor's. Restores the archived
+        previous version. Returns True if a rollback happened.
+        """
+        s = self._stats.get(skill_name, {})
+        version = s.get("version", 1)
+        if version < 2:
+            return False
+        versions = s.get("versions", {})
+        cur = versions.get(str(version), {})
+        prev = versions.get(str(version - 1), {})
+        cur_uses = cur.get("uses", 0)
+        prev_uses = prev.get("uses", 0)
+        if cur_uses < self._rollback_min_samples or prev_uses == 0:
+            return False
+        cur_rate = cur.get("successes", 0) / cur_uses
+        prev_rate = prev.get("successes", 0) / prev_uses
+        if cur_rate + self._rollback_margin >= prev_rate:
+            return False
+
+        archive = self._versions_dir(skill_name) / f"v{version - 1}.py"
+        if not archive.exists():
+            return False
+        skill_file = self._skills_dir / f"{skill_name}.py"
+        try:
+            skill_file.write_text(archive.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not roll back skill %s: %s", skill_name, exc)
+            return False
+
+        s["version"] = version - 1
+        s["rollback_count"] = s.get("rollback_count", 0) + 1
+        s["rolled_back_at"] = datetime.now(UTC).isoformat()
+        s["failures_since_improve"] = 0
+        self._save_stats()
+        logger.info(
+            "Rolled back skill %s: v%d (%.0f%%) regressed below v%d (%.0f%%)",
+            skill_name, version, cur_rate * 100, version - 1, prev_rate * 100,
+        )
+        return True
+
+    def create_skill(
+        self,
+        name: str,
+        code: str,
+        description: str = "",
+        tags: list[str] | None = None,
+    ) -> str:
+        """Author a new skill on demand (the auto skill maker).
+
+        Validates that *code* is syntactically valid, uses the ``@skill``
+        decorator, and defines at least one function, then writes it to the
+        skills directory and registers initial stats. Returns the file path.
+        """
+        slug = _slugify(name)
+        if not _validate_python_syntax(code):
+            raise ValueError("Skill code has invalid Python syntax")
+        if "@skill" not in code:
+            raise ValueError("Skill code must decorate a function with @skill")
+        if not _skill_function_names(code):
+            raise ValueError("Skill code defines no function")
+        dest = self._skills_dir / f"{slug}.py"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(code, encoding="utf-8")
+        self._stats.setdefault(slug, {
+            "use_count": 0, "success_count": 0, "version": 1,
+            "usage_log": [], "last_used": None, "improved_at": None,
+            "created_by": "agent", "created_at": datetime.now(UTC).isoformat(),
+        })
+        self._save_stats()
+        logger.info("Auto skill maker created skill %s (%s)", slug, description[:60])
+        return str(dest)
+
+    # ------------------------------------------------------------------
+    # Versioning helpers
+    # ------------------------------------------------------------------
+
+    def _versions_dir(self, skill_name: str) -> Path:
+        return self._skills_dir / ".versions" / skill_name
+
+    def _archive_version(self, skill_name: str, version: int, code: str) -> None:
+        """Snapshot a skill's *version* code so a later version can be rolled back."""
+        vdir = self._versions_dir(skill_name)
+        vdir.mkdir(parents=True, exist_ok=True)
+        try:
+            (vdir / f"v{version}.py").write_text(code, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not archive %s v%d: %s", skill_name, version, exc)
+
+    def _validate_candidate(self, original: str, candidate: str) -> tuple[bool, str]:
+        """Evidence gate: a candidate must be valid and preserve the skill's API."""
+        if not candidate.strip():
+            return False, "empty candidate"
+        if not _validate_python_syntax(candidate):
+            return False, "invalid Python syntax"
+        if "@skill" not in candidate and "_is_skill" not in candidate:
+            return False, "candidate dropped the @skill decorator"
+        original_fns = _skill_function_names(original)
+        candidate_fns = _skill_function_names(candidate)
+        if original_fns and not (original_fns & candidate_fns):
+            return False, f"candidate dropped the public function(s) {sorted(original_fns)}"
+        return True, "ok"
 
     def export_skill(self, skill_name: str) -> dict[str, Any] | None:
         """Return a portable dict for sharing/importing this skill."""

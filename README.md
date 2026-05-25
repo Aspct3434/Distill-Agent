@@ -230,6 +230,18 @@ POST {url}/exec  {command, cwd, timeout, stdin?, background?, log_path?}
 
 That ~20-line shim is the entire provider integration — no SDK is baked into the repo.
 
+## Self-improving skills (evidence-gated evolution)
+
+agent-ai doesn't just rewrite skills on use like other agents — it evolves them **safely and reversibly**:
+
+- Every skill is **versioned**; each version's real success rate is tracked from actual invocations.
+- An LLM synthesises an improvement after repeated uses *or* repeated failures — but a candidate is **promoted only if it passes a validation gate** (valid Python, keeps the `@skill` decorator, preserves the public function signature). The prior version is archived.
+- If a promoted version **measurably regresses** (success rate drops past `SKILL_ROLLBACK_MARGIN` over `SKILL_ROLLBACK_MIN_SAMPLES` uses), it is **automatically rolled back** to the previous version.
+
+Net effect: skills only ever get better — a bad "improvement" can't stick.
+
+**Auto skill maker** — the agent can author its own reusable tools on the fly with the `create_skill` tool (validated for syntax + `@skill` + a defined function, then registered and immediately callable), in addition to the automatic post-task distillation of successful trajectories.
+
 ## Shareable skills (agentskills.io)
 
 Distilled skills export to / import from the open [agentskills.io](https://agentskills.io) `SKILL.md` format (YAML frontmatter + a fenced `python` block):

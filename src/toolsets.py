@@ -89,6 +89,22 @@ _DATA_WRITE_TOOLS: frozenset[str] = frozenset({"create_table", "write_query"})
 
 _DELEGATION_TOOLS: frozenset[str] = frozenset({"delegate_task"})
 
+# Builtin capabilities that must reach the model regardless of the active
+# toolset (control, introspection, scheduling, skill authoring, image gen).
+# Force-included by filter_tools_by_toolset so a narrow toolset never hides them.
+_ALWAYS_TOOLS: frozenset[str] = frozenset(
+    {
+        "set_task_contract",
+        "update_plan",
+        "list_skills",
+        "create_skill",
+        "schedule_task",
+        "list_scheduled_tasks",
+        "analyze_image",
+        "generate_image",
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Named toolsets
 # ---------------------------------------------------------------------------
@@ -144,8 +160,9 @@ def filter_tools_by_toolset(
     """Return only the tool *schemas* that belong to *toolset_name*.
 
     Unknown names fall back silently to ``"all"``.
-    ``set_task_contract`` and ``update_plan`` are always included so the
-    agent can self-correct its contract or plan regardless of toolset.
+    The control/introspection builtins in ``_ALWAYS_TOOLS`` (set_task_contract,
+    update_plan, list_skills, create_skill, schedule_task, …) are always
+    included so a narrow toolset never hides them from the model.
     """
-    allowed = TOOLSETS.get(toolset_name, TOOLSETS["all"])
+    allowed = TOOLSETS.get(toolset_name, TOOLSETS["all"]) | _ALWAYS_TOOLS
     return [t for t in all_tools if t.get("name") in allowed]

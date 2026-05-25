@@ -2000,6 +2000,11 @@ class AgentEngine:
                 return self._list_skills(), False, "__builtin__"
             except Exception as exc:
                 return f"[list_skills error] {exc}", True, "__builtin__"
+        if tool_name == "create_skill":
+            try:
+                return await self._create_skill(arguments), False, "__builtin__"
+            except Exception as exc:
+                return f"[create_skill error] {exc}", True, "__builtin__"
 
         server = tool_index.get(tool_name)
         if server is None:
@@ -2009,7 +2014,14 @@ class AgentEngine:
                 None,
             )
         mcp_result = await self._tools.call_tool(server, tool_name, arguments)
-        return _extract_tool_text(mcp_result), mcp_result.isError, server
+        text = _extract_tool_text(mcp_result)
+        # Self-improvement loop: record real skill outcomes and evolve the skill
+        # (evidence-gated improvement, or rollback of a regressed version).
+        if server == "skills":
+            self._observe_skill_use(
+                tool_name, success=not mcp_result.isError, arguments=arguments, outcome=text
+            )
+        return text, mcp_result.isError, server
 
     def _build_user_profile_message(self) -> dict[str, Any] | None:
         """Return a system message with the user profile summary, or None if empty."""
@@ -2061,6 +2073,51 @@ class AgentEngine:
         if self._skill_registry is None:
             return json.dumps({"skills": [], "note": "Skill registry not configured on this engine."})
         return json.dumps({"skills": self._skill_registry.list_skills()}, indent=2)
+
+    async def _create_skill(self, arguments: dict[str, Any]) -> str:
+        """Author a new skill on demand (the auto skill maker) and load it."""
+        if self._skill_registry is None:
+            return json.dumps({"error": "Skill registry is not configured on this engine."})
+        path = self._skill_registry.create_skill(
+            name=arguments["name"],
+            code=arguments["code"],
+            description=arguments.get("description", ""),
+            tags=arguments.get("tags", []),
+        )
+        # Reconnect the skills MCP server so the new skill is immediately callable.
+        try:
+            await self._tools.connect_skills_server()
+        except Exception as exc:
+            logger.warning("create_skill: skills server reconnect failed: %s", exc)
+        return json.dumps({"status": "created", "path": path}, indent=2)
+
+    def _observe_skill_use(
+        self, skill_name: str, *, success: bool, arguments: dict[str, Any], outcome: str
+    ) -> None:
+        """Record a skill invocation and kick off evidence-gated evolution."""
+        reg = self._skill_registry
+        if reg is None:
+            return
+        try:
+            reg.record_use(skill_name, success=success)
+            reg.record_use_example(
+                skill_name, task=json.dumps(arguments)[:200], outcome=outcome[:200]
+            )
+        except Exception as exc:
+            logger.debug("record skill use failed for %s: %s", skill_name, exc)
+            return
+        # Fire-and-forget so the skill evolution never blocks the agent turn.
+        asyncio.create_task(self._evolve_skill(skill_name))  # noqa: RUF006
+
+    async def _evolve_skill(self, skill_name: str) -> None:
+        if self._skill_registry is None:
+            return
+        try:
+            action = await self._skill_registry.maybe_evolve(skill_name)
+            if action != "unchanged":
+                logger.info("Skill %s evolution: %s", skill_name, action)
+        except Exception as exc:
+            logger.debug("skill evolution failed for %s: %s", skill_name, exc)
 
     def _directive_system_message(self) -> dict[str, Any]:
         """Build the durable system-directive message.

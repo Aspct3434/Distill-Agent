@@ -1632,6 +1632,43 @@ LIST_SKILLS_TOOL: dict[str, Any] = {
     },
 }
 
+CREATE_SKILL_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "create_skill",
+    "description": (
+        "Author a NEW reusable skill on demand and register it immediately so "
+        "future turns can call it. Use this when you've worked out a reusable "
+        "procedure and want to save it as a callable tool (the auto skill maker), "
+        "instead of waiting for post-task distillation.\n"
+        "The code MUST: start with `from _skill import skill`, decorate the "
+        "function with `@skill`, define a single well-named function with typed "
+        "parameters and a docstring, and return a JSON-serialisable result. Keep "
+        "it self-contained (imports inside the function) and side-effect-aware.\n"
+        "Example code:\n"
+        "from _skill import skill\n\n"
+        "@skill\n"
+        "def count_lines(path: str) -> int:\n"
+        "    \"Return the number of lines in a file.\"\n"
+        "    with open(path) as f:\n"
+        "        return sum(1 for _ in f)\n"
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["name", "code"],
+        "properties": {
+            "name": {"type": "string", "description": "Short snake_case skill name."},
+            "code": {"type": "string", "description": "Full @skill-decorated Python source."},
+            "description": {"type": "string", "description": "One-line summary of the skill."},
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional tags for discovery.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
 SCHEDULE_TASK_TOOL: dict[str, Any] = {
     "server": "__builtin__",
     "name": "schedule_task",
@@ -1882,6 +1919,7 @@ class ToolManager:
         results.append(SCHEDULE_TASK_TOOL)
         results.append(LIST_SCHEDULED_TASKS_TOOL)
         results.append(LIST_SKILLS_TOOL)
+        results.append(CREATE_SKILL_TOOL)
         self._tools_cache = results
         return results
 
