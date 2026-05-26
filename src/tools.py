@@ -1690,6 +1690,79 @@ RECALL_MEMORY_TOOL: dict[str, Any] = {
     },
 }
 
+LIST_EVOLUTION_CANDIDATES_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "list_evolution_candidates",
+    "description": (
+        "List proof-carrying self-improvement candidates. Candidates are staged, "
+        "promoted, rejected, or rolled_back. Use this to inspect skill/prompt/"
+        "toolset improvements before running or rolling back evolution."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["staged", "promoted", "rejected", "rolled_back"],
+                "description": "Optional status filter.",
+            }
+        },
+        "additionalProperties": False,
+    },
+}
+
+INSPECT_EVOLUTION_CANDIDATE_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "inspect_evolution_candidate",
+    "description": (
+        "Inspect one evolution candidate, including payload metadata, baseline, "
+        "proof bundle, rejection reason, and rollback target."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["candidate_id"],
+        "properties": {
+            "candidate_id": {"type": "string", "description": "Evolution candidate ID."}
+        },
+        "additionalProperties": False,
+    },
+}
+
+RUN_EVOLUTION_CYCLE_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "run_evolution_cycle",
+    "description": (
+        "Run the proof-carrying evolution verifier over staged candidates. "
+        "Passing candidates are promoted with a proof bundle; failing candidates "
+        "are rejected with reasons. This is the only way staged skills become live."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "Max candidates to process (default 5)."}
+        },
+        "additionalProperties": False,
+    },
+}
+
+ROLLBACK_EVOLUTION_CANDIDATE_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "rollback_evolution_candidate",
+    "description": (
+        "Roll back a promoted proof-carrying evolution candidate using its stored "
+        "rollback target. For skills this restores the previous file contents or "
+        "removes a newly-created generated skill."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["candidate_id"],
+        "properties": {
+            "candidate_id": {"type": "string", "description": "Promoted candidate ID to roll back."}
+        },
+        "additionalProperties": False,
+    },
+}
+
 SCHEDULE_TASK_TOOL: dict[str, Any] = {
     "server": "__builtin__",
     "name": "schedule_task",
@@ -1942,6 +2015,10 @@ class ToolManager:
         results.append(LIST_SKILLS_TOOL)
         results.append(CREATE_SKILL_TOOL)
         results.append(RECALL_MEMORY_TOOL)
+        results.append(LIST_EVOLUTION_CANDIDATES_TOOL)
+        results.append(INSPECT_EVOLUTION_CANDIDATE_TOOL)
+        results.append(RUN_EVOLUTION_CYCLE_TOOL)
+        results.append(ROLLBACK_EVOLUTION_CANDIDATE_TOOL)
         self._tools_cache = results
         return results
 

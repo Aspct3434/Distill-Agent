@@ -28,6 +28,7 @@ from approvals import ApprovalGate
 from auth.oauth import CodexOAuth, wait_for_callback
 from checkpointer import StateCheckpointer, initialize_checkpoints_db
 from evaluator import SkillDistiller, SkillRegistry
+from evolution import EvolutionEngine
 from memory import UserProfileStore
 from persona import PersonaLoader
 from scheduler import CronScheduler, _validate_schedule
@@ -413,8 +414,21 @@ async def lifespan(app: FastAPI):
         improve_after_uses=int(os.getenv("SKILL_IMPROVE_AFTER_USES", "5")),
     )
 
+    # -- Proof-carrying evolution ----------------------------------------
+    evolution_db_path = Path(os.getenv("EVOLUTION_DB_PATH", str(data_dir / "evolution.db")))
+    evolution_engine = EvolutionEngine(
+        ledger_path=evolution_db_path,
+        skills_dir=skills_dir,
+        skill_registry=skill_registry,
+        model=fast_model,
+    )
+
     # -- Distiller --------------------------------------------------------
-    distiller = SkillDistiller(skills_dir=skills_dir, model=fast_model)
+    distiller = SkillDistiller(
+        skills_dir=skills_dir,
+        model=fast_model,
+        evolution_engine=evolution_engine,
+    )
     await distiller.start()
 
     # -- Memory -----------------------------------------------------------
@@ -443,6 +457,7 @@ async def lifespan(app: FastAPI):
         persona_content=persona_content,
         session_store=session_store,
         approval_gate=approval_gate,
+        evolution_engine=evolution_engine,
     )
 
     # -- Cron scheduler ---------------------------------------------------
@@ -478,6 +493,7 @@ async def lifespan(app: FastAPI):
     app.state.persona = persona
     app.state.profile_store = profile_store
     app.state.skill_registry = skill_registry
+    app.state.evolution_engine = evolution_engine
     app.state.scheduler = scheduler
     app.state.session_store = session_store
     app.state.approval_gate = approval_gate
@@ -537,6 +553,7 @@ async def lifespan(app: FastAPI):
         )
         await slack_adapter.start()
         app.state.slack_adapter = slack_adapter
+
 
     # -- Scheduled-task delivery to messaging --------------------------------
     # Lets cron jobs push their result to a chat (deliver_to="tg:123" etc.),
@@ -610,6 +627,7 @@ async def status() -> dict[str, Any]:
     engine: AgentEngine = app.state.engine
     skills = app.state.skill_registry.list_skills()
     jobs = app.state.scheduler.list_jobs()
+    evolution = app.state.evolution_engine.status()
     return {
         "model": engine._model,
         "fast_model": engine._fast_model,
@@ -628,6 +646,7 @@ async def status() -> dict[str, Any]:
             "count": len(jobs),
             "enabled": sum(1 for j in jobs if j.get("enabled")),
         },
+        "evolution": evolution["candidates"],
         "active_sessions": len(app.state.gateway.active_sessions),
     }
 
@@ -671,6 +690,56 @@ async def get_logs(level: str = "ALL", limit: int = 200) -> list[dict[str, Any]]
 async def clear_logs() -> dict[str, str]:
     _log_buffer.clear()
     return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Proof-carrying evolution API
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/evolution/status")
+async def evolution_status() -> dict[str, Any]:
+    return app.state.evolution_engine.status()
+
+
+@app.get("/api/evolution/candidates")
+async def list_evolution_candidates(status: str | None = None) -> list[dict[str, Any]]:
+    return app.state.evolution_engine.list_candidates(status=status)
+
+
+@app.get("/api/evolution/candidates/{candidate_id}")
+async def get_evolution_candidate(candidate_id: str) -> dict[str, Any]:
+    candidate = app.state.evolution_engine.inspect_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail=f"Candidate {candidate_id!r} not found")
+    return candidate
+
+
+class EvolutionRunRequest(BaseModel):
+    limit: int = 5
+
+
+@app.post("/api/evolution/run")
+async def run_evolution(payload: EvolutionRunRequest | None = None) -> dict[str, Any]:
+    limit = payload.limit if payload is not None else 5
+    result = app.state.evolution_engine.run_cycle(limit=limit)
+    try:
+        await app.state.tools.connect_skills_server()
+    except Exception as exc:
+        logger.warning("Evolution run: skills reconnect failed: %s", exc)
+    return result
+
+
+@app.post("/api/evolution/candidates/{candidate_id}/rollback")
+async def rollback_evolution_candidate(candidate_id: str) -> dict[str, Any]:
+    result = app.state.evolution_engine.rollback(candidate_id)
+    if result.get("error") == "candidate not found":
+        raise HTTPException(status_code=404, detail=result["error"])
+    try:
+        await app.state.tools.connect_skills_server()
+    except Exception as exc:
+        logger.warning("Evolution rollback: skills reconnect failed: %s", exc)
+    return result
 
 
 # ---------------------------------------------------------------------------

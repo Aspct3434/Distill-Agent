@@ -74,6 +74,7 @@ from toolsets import filter_tools_by_toolset
 
 if TYPE_CHECKING:
     from evaluator import SkillRegistry
+    from evolution import EvolutionEngine
     from memory import HybridMemory, UserProfileStore
     from scheduler import CronScheduler
 
@@ -825,6 +826,7 @@ class AgentEngine:
         persona_content: str = "",
         session_store: Any = None,
         approval_gate: Any = None,
+        evolution_engine: EvolutionEngine | None = None,
     ) -> None:
         self._memory = memory
         self._tools = tools
@@ -847,6 +849,7 @@ class AgentEngine:
         self._skill_registry = skill_registry
         self._session_store = session_store
         self._approval_gate = approval_gate
+        self._evolution_engine = evolution_engine
         self._histories: dict[str, list[dict[str, Any]]] = {}
 
     def update_models(
@@ -1666,6 +1669,12 @@ class AgentEngine:
                     "available_tools": [t["name"] for t in all_tools],
                 },
             )
+            if self._evolution_engine is not None:
+                try:
+                    trace_id = self._evolution_engine.record_trajectory(trajectory)
+                    trajectory.metadata["evolution_trace_id"] = trace_id
+                except Exception as exc:
+                    logger.debug("evolution trace recording failed: %s", exc)
             asyncio.create_task(  # noqa: RUF006
                 self._distiller.submit(trajectory),
                 name=f"distill:{session_id}",
@@ -2026,6 +2035,36 @@ class AgentEngine:
                 return await self._recall_memory(arguments), False, "__builtin__"
             except Exception as exc:
                 return f"[recall_memory error] {exc}", True, "__builtin__"
+        if tool_name == "list_evolution_candidates":
+            try:
+                return self._list_evolution_candidates(arguments), False, "__builtin__"
+            except Exception as exc:
+                return f"[list_evolution_candidates error] {exc}", True, "__builtin__"
+        if tool_name == "inspect_evolution_candidate":
+            try:
+                return self._inspect_evolution_candidate(arguments), False, "__builtin__"
+            except Exception as exc:
+                return f"[inspect_evolution_candidate error] {exc}", True, "__builtin__"
+        if tool_name == "run_evolution_cycle":
+            try:
+                result = self._run_evolution_cycle(arguments)
+                try:
+                    await self._tools.connect_skills_server()
+                except Exception as exc:
+                    logger.warning("run_evolution_cycle: skills reconnect failed: %s", exc)
+                return result, False, "__builtin__"
+            except Exception as exc:
+                return f"[run_evolution_cycle error] {exc}", True, "__builtin__"
+        if tool_name == "rollback_evolution_candidate":
+            try:
+                result = self._rollback_evolution_candidate(arguments)
+                try:
+                    await self._tools.connect_skills_server()
+                except Exception as exc:
+                    logger.warning("rollback_evolution_candidate: skills reconnect failed: %s", exc)
+                return result, False, "__builtin__"
+            except Exception as exc:
+                return f"[rollback_evolution_candidate error] {exc}", True, "__builtin__"
 
         server = tool_index.get(tool_name)
         if server is None:
@@ -2123,10 +2162,56 @@ class AgentEngine:
         results = await asyncio.to_thread(self._session_store.search, query, limit)
         return json.dumps({"query": query, "results": results}, indent=2)
 
+    def _list_evolution_candidates(self, arguments: dict[str, Any]) -> str:
+        if self._evolution_engine is None:
+            return json.dumps({"candidates": [], "note": "Evolution engine not configured."})
+        status = arguments.get("status")
+        candidates = self._evolution_engine.list_candidates(str(status) if status else None)
+        return json.dumps({"candidates": candidates}, indent=2)
+
+    def _inspect_evolution_candidate(self, arguments: dict[str, Any]) -> str:
+        if self._evolution_engine is None:
+            return json.dumps({"error": "Evolution engine not configured."})
+        candidate = self._evolution_engine.inspect_candidate(str(arguments["candidate_id"]))
+        if candidate is None:
+            return json.dumps({"error": "candidate not found"})
+        return json.dumps(candidate, indent=2)
+
+    def _run_evolution_cycle(self, arguments: dict[str, Any]) -> str:
+        if self._evolution_engine is None:
+            return json.dumps({"error": "Evolution engine not configured."})
+        limit = int(arguments.get("limit", 5) or 5)
+        return json.dumps(self._evolution_engine.run_cycle(limit=limit), indent=2)
+
+    def _rollback_evolution_candidate(self, arguments: dict[str, Any]) -> str:
+        if self._evolution_engine is None:
+            return json.dumps({"error": "Evolution engine not configured."})
+        return json.dumps(
+            self._evolution_engine.rollback(str(arguments["candidate_id"])),
+            indent=2,
+        )
+
     async def _create_skill(self, arguments: dict[str, Any]) -> str:
         """Author a new skill on demand (the auto skill maker) and load it."""
         if self._skill_registry is None:
             return json.dumps({"error": "Skill registry is not configured on this engine."})
+        if self._evolution_engine is not None:
+            candidate = self._evolution_engine.stage_skill_candidate(
+                name=arguments["name"],
+                code=arguments["code"],
+                reason="auto_skill_maker",
+            )
+            return json.dumps(
+                {
+                    "status": "staged",
+                    "candidate_id": candidate["candidate_id"],
+                    "message": (
+                        "Skill candidate staged. It becomes callable only after "
+                        "run_evolution_cycle promotes it with a proof bundle."
+                    ),
+                },
+                indent=2,
+            )
         path = self._skill_registry.create_skill(
             name=arguments["name"],
             code=arguments["code"],
@@ -2144,6 +2229,16 @@ class AgentEngine:
         self, skill_name: str, *, success: bool, arguments: dict[str, Any], outcome: str
     ) -> None:
         """Record a skill invocation and kick off evidence-gated evolution."""
+        if self._evolution_engine is not None:
+            asyncio.create_task(  # noqa: RUF006
+                self._evolution_engine.observe_skill_use(
+                    skill_name,
+                    success=success,
+                    arguments=arguments,
+                    outcome=outcome,
+                )
+            )
+            return
         reg = self._skill_registry
         if reg is None:
             return
@@ -2175,18 +2270,41 @@ class AgentEngine:
         ``cache_control`` breakpoint so this large, session-stable prefix is read
         from cache on every iteration after the first instead of being re-billed.
         """
+        directive = self._effective_system_directive()
         if self._caching_enabled:
             return {
                 "role": "system",
                 "content": [
                     {
                         "type": "text",
-                        "text": self._system_directive,
+                        "text": directive,
                         "cache_control": {"type": "ephemeral"},
                     }
                 ],
             }
-        return {"role": "system", "content": self._system_directive}
+        return {"role": "system", "content": directive}
+
+    def _effective_system_directive(self) -> str:
+        directive = self._system_directive
+        engine = self._evolution_engine
+        if engine is None:
+            return directive
+        policy_sections: list[str] = []
+        prompt_policy = engine.active_prompt_policy()
+        if prompt_policy:
+            policy_sections.append(
+                "Active proof-promoted prompt policy (additive, cannot override "
+                f"core task-contract/sandbox/approval rules):\n{prompt_policy}"
+            )
+        toolset_policy = engine.active_toolset_policy()
+        if toolset_policy:
+            policy_sections.append(
+                "Active proof-promoted toolset-selection policy (additive, cannot "
+                f"hide required evidence tools):\n{toolset_policy}"
+            )
+        if not policy_sections:
+            return directive
+        return f"{directive}\n\n" + "\n\n".join(policy_sections)
 
     def _build_host_environment_message(self) -> dict[str, Any]:
         """Inject an authoritative host-environment summary once per session.

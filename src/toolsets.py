@@ -103,6 +103,10 @@ _ALWAYS_TOOLS: frozenset[str] = frozenset(
         "list_scheduled_tasks",
         "analyze_image",
         "generate_image",
+        "list_evolution_candidates",
+        "inspect_evolution_candidate",
+        "run_evolution_cycle",
+        "rollback_evolution_candidate",
     }
 )
 

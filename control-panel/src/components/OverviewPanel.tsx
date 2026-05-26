@@ -134,6 +134,11 @@ export function OverviewPanel() {
           icon={Activity}
           label="Active sessions"
           value={status?.active_sessions ?? "—"}
+          sub={
+            status
+              ? `${status.evolution.staged} staged / ${status.evolution.promoted} promoted`
+              : undefined
+          }
         />
       </div>
 

@@ -3,6 +3,7 @@ import {
   Activity,
   Brain,
   CalendarClock,
+  GitBranch,
   HardDrive,
   MessageSquare,
   Settings,
@@ -20,11 +21,13 @@ import { PersonaPanel } from "./PersonaPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { LogsPanel } from "./LogsPanel";
 import { ApprovalsBanner } from "./ApprovalsBanner";
+import { EvolutionPanel } from "./EvolutionPanel";
 
 type Section =
   | "overview"
   | "chat"
   | "skills"
+  | "evolution"
   | "schedule"
   | "tools"
   | "memory"
@@ -43,6 +46,7 @@ const NAV_CORE: NavSpec[] = [
   { id: "overview", label: "Overview", icon: Activity },
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "skills", label: "Skills", icon: Brain },
+  { id: "evolution", label: "Evolution", icon: GitBranch },
   { id: "schedule", label: "Schedule", icon: CalendarClock },
 ];
 
@@ -180,6 +184,7 @@ export function Dashboard() {
             >
               {section === "overview" && <OverviewPanel />}
               {section === "skills" && <SkillsPanel />}
+              {section === "evolution" && <EvolutionPanel />}
               {section === "schedule" && <SchedulePanel />}
               {section === "memory" && <MemoryPanel />}
               {section === "persona" && <PersonaPanel />}

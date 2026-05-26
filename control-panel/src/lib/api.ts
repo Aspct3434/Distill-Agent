@@ -42,6 +42,11 @@ export interface Skill {
   version: number;
   last_used: string | null;
   improved_at: string | null;
+  evolution_status: string;
+  version_hash: string;
+  last_proof_id: string | null;
+  promoted_at: string | null;
+  rollback_count: number;
 }
 
 export interface CronJob {
@@ -110,6 +115,36 @@ export interface LogEntry {
   message: string;
 }
 
+export interface EvolutionCandidate {
+  candidate_id: string;
+  kind: "skill" | "prompt_policy" | "toolset_policy";
+  name: string;
+  status: "staged" | "promoted" | "rejected" | "rolled_back";
+  payload: Record<string, unknown>;
+  baseline: Record<string, unknown>;
+  source_trace_ids: string[];
+  proof: {
+    passed?: boolean;
+    baseline_score?: number;
+    candidate_score?: number;
+    score_delta?: number;
+    checks?: { name: string; passed: boolean; detail?: unknown }[];
+  };
+  rejection_reason: string;
+  rollback: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  promoted_at: string | null;
+}
+
+export interface EvolutionStatus {
+  db_path: string;
+  staging_dir: string;
+  verifier_version: string;
+  candidates: { staged: number; promoted: number; rejected: number; rolled_back: number };
+  active_policies: { prompt_policy: boolean; toolset_policy: boolean };
+}
+
 export interface PersonaInfo {
   persona_dir: string | null;
   active_persona: string | null;
@@ -126,5 +161,6 @@ export interface Status {
   channels: { telegram: boolean; discord: boolean; slack: boolean };
   skills: { count: number; improved: number };
   cron: { count: number; enabled: number };
+  evolution: { staged: number; promoted: number; rejected: number; rolled_back: number };
   active_sessions: number;
 }

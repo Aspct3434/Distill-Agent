@@ -112,12 +112,14 @@ class SkillDistiller:
         max_queue_size: int = 0,
         skills_dir: str | Path = "skills",
         model: str | None = None,
+        evolution_engine: Any = None,
     ) -> None:
         self._queue: asyncio.Queue[ExecutionTrajectory | None] = asyncio.Queue(
             maxsize=max_queue_size
         )
         self._skills_dir = Path(skills_dir)
         self._model = model
+        self._evolution_engine = evolution_engine
         self._task: asyncio.Task[None] | None = None
         self._started = False
 
@@ -176,7 +178,10 @@ class SkillDistiller:
         if skill_code is None:
             return
 
-        await asyncio.to_thread(self._write_skill_file, trajectory, skill_code)
+        if self._evolution_engine is not None:
+            self._stage_skill_candidate(trajectory, skill_code)
+        else:
+            await asyncio.to_thread(self._write_skill_file, trajectory, skill_code)
 
     async def _synthesize_skill_code(self, trajectory: ExecutionTrajectory) -> str | None:
         step_summary = _summarize_steps_for_prompt(trajectory.steps)
@@ -220,13 +225,32 @@ class SkillDistiller:
 
     def _write_skill_file(self, trajectory: ExecutionTrajectory, skill_code: str) -> None:
         self._skills_dir.mkdir(parents=True, exist_ok=True)
+        stem, digest = self._skill_stem_and_digest(trajectory)
+        path = self._skills_dir / f"{stem}_{digest}.py"
+        path.write_text(skill_code, encoding="utf-8")
+        logger.info("Distilled skill written: %s", path.name)
+
+    def _stage_skill_candidate(self, trajectory: ExecutionTrajectory, skill_code: str) -> None:
+        stem, digest = self._skill_stem_and_digest(trajectory)
+        trace_id = str(trajectory.metadata.get("evolution_trace_id") or "")
+        source_trace_ids = [trace_id] if trace_id else []
+        candidate = self._evolution_engine.stage_skill_candidate(
+            name=f"{stem}_{digest}",
+            code=skill_code,
+            source_trace_ids=source_trace_ids,
+            reason="distilled_trajectory",
+        )
+        logger.info(
+            "Distilled skill staged for proof-carrying evolution: %s",
+            candidate.get("candidate_id"),
+        )
+
+    def _skill_stem_and_digest(self, trajectory: ExecutionTrajectory) -> tuple[str, str]:
         stem = _slugify(trajectory.prompt)
         digest = hashlib.sha256(
             trajectory.prompt.strip().lower().encode("utf-8")
         ).hexdigest()[:8]
-        path = self._skills_dir / f"{stem}_{digest}.py"
-        path.write_text(skill_code, encoding="utf-8")
-        logger.info("Distilled skill written: %s", path.name)
+        return stem, digest
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +440,7 @@ class SkillRegistry:
                 continue
             name = py_file.stem
             stats = self._stats.get(name, {})
+            version_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
             skills.append({
                 "name": name,
                 "file": py_file.name,
@@ -426,6 +451,11 @@ class SkillRegistry:
                 "version": stats.get("version", 1),
                 "last_used": stats.get("last_used"),
                 "improved_at": stats.get("improved_at"),
+                "evolution_status": stats.get("evolution_status", "live"),
+                "version_hash": stats.get("version_hash", version_hash),
+                "last_proof_id": stats.get("last_proof_id"),
+                "promoted_at": stats.get("promoted_at"),
+                "rollback_count": stats.get("rollback_count", 0),
             })
         return skills
 

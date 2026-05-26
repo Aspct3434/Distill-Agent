@@ -92,6 +92,11 @@ export function SkillsPanel() {
                   <TrendingUp size={11} /> v{skill.version}
                 </span>
               )}
+              {skill.evolution_status !== "live" && (
+                <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">
+                  {skill.evolution_status}
+                </span>
+              )}
               <a
                 href={`${API_BASE}/api/skills/${encodeURIComponent(skill.name)}/export.md`}
                 target="_blank"
@@ -135,6 +140,12 @@ export function SkillsPanel() {
                 {ratePct(skill.success_rate)} success
               </span>
               <span className="ml-auto">used {fmtDate(skill.last_used)}</span>
+            </div>
+
+            <div className="flex items-center gap-3 font-mono text-[10px] text-zinc-600">
+              <span title="Current version hash">{skill.version_hash.slice(0, 10)}</span>
+              {skill.last_proof_id && <span title="Last proof bundle">{skill.last_proof_id}</span>}
+              {skill.rollback_count > 0 && <span>{skill.rollback_count} rollback(s)</span>}
             </div>
 
             <div className="h-1 overflow-hidden rounded-full bg-zinc-800" title="Success rate">
