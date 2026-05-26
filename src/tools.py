@@ -1481,6 +1481,171 @@ UPDATE_PLAN_TOOL: dict[str, Any] = {
     },
 }
 
+SET_TASK_GRAPH_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "set_task_graph",
+    "description": (
+        "Create or replace the proof-carrying task graph for the current execute-mode "
+        "task. Prefer this over a loose update_plan checklist for multi-step work. "
+        "Each node is a typed DAG step with dependencies, allowed tools, proof "
+        "requirements, evidence refs, failure reason, and retry count. Invalid "
+        "dependencies, cycles, duplicate node IDs, unknown statuses, and unknown "
+        "proof requirements are rejected."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["nodes"],
+        "properties": {
+            "nodes": {
+                "type": "array",
+                "description": "Full replacement DAG for the current task.",
+                "items": {
+                    "type": "object",
+                    "required": ["id", "title", "kind", "status"],
+                    "properties": {
+                        "id": {"type": "string", "description": "Stable node ID."},
+                        "title": {"type": "string", "description": "Short concrete node title."},
+                        "kind": {
+                            "type": "string",
+                            "enum": [
+                                "plan",
+                                "diagnose",
+                                "write",
+                                "command",
+                                "service",
+                                "verify",
+                                "delegate",
+                                "finalize",
+                            ],
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending", "ready", "in_progress", "done", "failed", "blocked"],
+                        },
+                        "depends_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Node IDs that must be terminal before this node is ready.",
+                        },
+                        "allowed_tools": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Tools that may be used while working this node.",
+                        },
+                        "proof_requirements": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "filesystem_artifact",
+                                    "running_http_service",
+                                    "running_tcp_service",
+                                    "database_mutation",
+                                    "command_output",
+                                    "artifact_quality",
+                                    "none",
+                                ],
+                            },
+                            "description": "Proof types this node must bind before being verified.",
+                        },
+                        "evidence_refs": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Successful tool_call_id values that prove this node.",
+                        },
+                        "failure_reason": {"type": "string"},
+                        "retry_count": {"type": "integer"},
+                    },
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+INSPECT_TASK_GRAPH_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "inspect_task_graph",
+    "description": (
+        "Inspect the current proof-carrying task graph. Returns nodes, active node, "
+        "ready nodes, blocked nodes, and the current verifier summary."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+
+UPDATE_TASK_NODE_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "update_task_node",
+    "description": (
+        "Update one task graph node after doing work. Use this to mark a node "
+        "in_progress, done, failed, or blocked, and attach evidence_refs using "
+        "successful tool_call_id values returned earlier in this task."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["node_id", "status"],
+        "properties": {
+            "node_id": {"type": "string", "description": "Node ID to update."},
+            "status": {
+                "type": "string",
+                "enum": ["pending", "ready", "in_progress", "done", "failed", "blocked"],
+            },
+            "evidence_refs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Successful tool_call_id values proving this node.",
+            },
+            "failure_reason": {
+                "type": "string",
+                "description": "Required when marking a node failed or blocked.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+REPAIR_TASK_GRAPH_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "repair_task_graph",
+    "description": (
+        "Repair the current task graph after a blocker or repeated node failure. "
+        "Completed evidence-bearing nodes are preserved; blocked or failed ready "
+        "nodes are reopened with the supplied reason so the agent can choose a "
+        "different route."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+            "reason": {
+                "type": "string",
+                "description": "Concrete blocker or recovery reason.",
+            },
+        },
+        "additionalProperties": False,
+    },
+}
+
+VERIFY_TASK_GRAPH_TOOL: dict[str, Any] = {
+    "server": "__builtin__",
+    "name": "verify_task_graph",
+    "description": (
+        "Verify the current task graph against real execution evidence. Returns "
+        "passed, missing_nodes, invalid_evidence_refs, blocked_nodes, and a proof "
+        "report for every node."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+
 DELEGATE_TASK_TOOL: dict[str, Any] = {
     "server": "__builtin__",
     "name": "delegate_task",
@@ -2004,6 +2169,11 @@ class ToolManager:
         results.append(EXECUTE_BACKGROUND_SERVICE_TOOL)
         results.append(EXPAND_TOOL_OUTPUT_TOOL)
         results.append(UPDATE_PLAN_TOOL)
+        results.append(SET_TASK_GRAPH_TOOL)
+        results.append(INSPECT_TASK_GRAPH_TOOL)
+        results.append(UPDATE_TASK_NODE_TOOL)
+        results.append(REPAIR_TASK_GRAPH_TOOL)
+        results.append(VERIFY_TASK_GRAPH_TOOL)
         results.append(DELEGATE_TASK_TOOL)
         # Vision / image-gen tools only appear when a vision model is configured.
         if _VISION_MODEL:

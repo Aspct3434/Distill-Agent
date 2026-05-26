@@ -8,6 +8,7 @@ import {
   MessageSquare,
   Settings,
   User,
+  Workflow,
   Wrench,
 } from "lucide-react";
 import { api, type Health } from "../lib/api";
@@ -22,11 +23,13 @@ import { ToolsPanel } from "./ToolsPanel";
 import { LogsPanel } from "./LogsPanel";
 import { ApprovalsBanner } from "./ApprovalsBanner";
 import { EvolutionPanel } from "./EvolutionPanel";
+import { TaskGraphPanel } from "./TaskGraphPanel";
 
 type Section =
   | "overview"
   | "chat"
   | "skills"
+  | "taskGraph"
   | "evolution"
   | "schedule"
   | "tools"
@@ -46,6 +49,7 @@ const NAV_CORE: NavSpec[] = [
   { id: "overview", label: "Overview", icon: Activity },
   { id: "chat", label: "Chat", icon: MessageSquare },
   { id: "skills", label: "Skills", icon: Brain },
+  { id: "taskGraph", label: "Task Graph", icon: Workflow },
   { id: "evolution", label: "Evolution", icon: GitBranch },
   { id: "schedule", label: "Schedule", icon: CalendarClock },
 ];
@@ -184,6 +188,7 @@ export function Dashboard() {
             >
               {section === "overview" && <OverviewPanel />}
               {section === "skills" && <SkillsPanel />}
+              {section === "taskGraph" && <TaskGraphPanel />}
               {section === "evolution" && <EvolutionPanel />}
               {section === "schedule" && <SchedulePanel />}
               {section === "memory" && <MemoryPanel />}

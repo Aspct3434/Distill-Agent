@@ -145,6 +145,39 @@ export interface EvolutionStatus {
   active_policies: { prompt_policy: boolean; toolset_policy: boolean };
 }
 
+export interface TaskGraphNode {
+  id: string;
+  title: string;
+  kind: string;
+  status: "pending" | "ready" | "in_progress" | "done" | "failed" | "blocked";
+  depends_on: string[];
+  allowed_tools: string[];
+  proof_requirements: string[];
+  evidence_refs: string[];
+  failure_reason: string;
+  retry_count: number;
+}
+
+export interface TaskGraphVerification {
+  passed: boolean;
+  missing_nodes: string[];
+  invalid_evidence_refs: { node_id: string; evidence_ref: string; reason: string }[];
+  blocked_nodes: string[];
+  proof_report: Record<string, unknown>[];
+  node_count?: number;
+}
+
+export interface TaskGraphSnapshot {
+  has_graph: boolean;
+  source: string | null;
+  nodes: TaskGraphNode[];
+  active_node: TaskGraphNode | null;
+  ready_nodes: TaskGraphNode[];
+  blocked_nodes: string[];
+  summary?: { total: number; done: number; failed: number; open: number };
+  verifier: TaskGraphVerification;
+}
+
 export interface PersonaInfo {
   persona_dir: string | null;
   active_persona: string | null;
@@ -162,5 +195,6 @@ export interface Status {
   skills: { count: number; improved: number };
   cron: { count: number; enabled: number };
   evolution: { staged: number; promoted: number; rejected: number; rolled_back: number };
+  task_graph: { active: number; blocked: number; open_nodes: number };
   active_sessions: number;
 }

@@ -8,6 +8,7 @@ import {
   MessageCircle,
   Radio,
   Send,
+  Workflow,
 } from "lucide-react";
 import { api, type Status } from "../lib/api";
 import { useCountUp } from "../lib/useCountUp";
@@ -109,7 +110,7 @@ export function OverviewPanel() {
       )}
 
       {/* Stat cards */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard
           icon={Brain}
           label="Skills"
@@ -134,9 +135,15 @@ export function OverviewPanel() {
           icon={Activity}
           label="Active sessions"
           value={status?.active_sessions ?? "—"}
+          sub="running"
+        />
+        <StatCard
+          icon={Workflow}
+          label="Task graphs"
+          value={status?.task_graph.active ?? "â€”"}
           sub={
             status
-              ? `${status.evolution.staged} staged / ${status.evolution.promoted} promoted`
+              ? `${status.task_graph.open_nodes} open / ${status.task_graph.blocked} blocked`
               : undefined
           }
         />

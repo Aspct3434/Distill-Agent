@@ -17,8 +17,13 @@ from tools import (  # noqa: E402
     EXECUTE_TERMINAL_COMMAND_TOOL,
     EXPOSE_LOCAL_HTTP_SERVICE_TOOL,
     GET_SYSTEM_ENVIRONMENT_TOOL,
+    INSPECT_TASK_GRAPH_TOOL,
+    REPAIR_TASK_GRAPH_TOOL,
     SET_TASK_CONTRACT_TOOL,
+    SET_TASK_GRAPH_TOOL,
     UPDATE_PLAN_TOOL,
+    UPDATE_TASK_NODE_TOOL,
+    VERIFY_TASK_GRAPH_TOOL,
     WRITE_TEXT_FILE_TOOL,
 )
 
@@ -59,6 +64,11 @@ class _FakeTools:
             },
             SET_TASK_CONTRACT_TOOL,
             UPDATE_PLAN_TOOL,
+            SET_TASK_GRAPH_TOOL,
+            INSPECT_TASK_GRAPH_TOOL,
+            UPDATE_TASK_NODE_TOOL,
+            REPAIR_TASK_GRAPH_TOOL,
+            VERIFY_TASK_GRAPH_TOOL,
             GET_SYSTEM_ENVIRONMENT_TOOL,
             WRITE_TEXT_FILE_TOOL,
             EXECUTE_TERMINAL_COMMAND_TOOL,
@@ -453,7 +463,11 @@ def test_execute_contract_narrows_tools_to_evidence_producers() -> None:
     events, tools, model = asyncio.run(_run_engine_with_model(script))
 
     assert model.request_tool_names[0] == ["set_task_contract"]
-    assert model.request_tool_names[1] == ["update_plan"]
+    assert model.request_tool_names[1] == [
+        "update_plan",
+        "set_task_graph",
+        "inspect_task_graph",
+    ]
     evidence_tool_names = set(model.request_tool_names[2])
     assert "write_text_file" in evidence_tool_names
     assert "expose_local_http_service" in evidence_tool_names
@@ -464,6 +478,74 @@ def test_execute_contract_narrows_tools_to_evidence_producers() -> None:
     assert tools.written
     assert any(
         event.get("type") == "text" and "sleep-importance" in event.get("content", "")
+        for event in events
+    )
+
+
+def test_explicit_task_graph_replaces_plan_and_narrows_to_active_node() -> None:
+    script = [
+        _completion(tool_calls=[_contract_tool("execute", ["filesystem_artifact"])]),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_graph",
+                    "set_task_graph",
+                    {
+                        "nodes": [
+                            {
+                                "id": "write",
+                                "title": "Write sleep artifact",
+                                "kind": "write",
+                                "status": "in_progress",
+                                "allowed_tools": ["write_text_file"],
+                                "proof_requirements": ["filesystem_artifact"],
+                            }
+                        ]
+                    },
+                )
+            ]
+        ),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_write",
+                    "write_text_file",
+                    {
+                        "path": "sleep-graph/index.html",
+                        "content": "<!doctype html><title>Sleep graph</title>",
+                    },
+                )
+            ]
+        ),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_done",
+                    "update_task_node",
+                    {
+                        "node_id": "write",
+                        "status": "done",
+                        "evidence_refs": ["call_write"],
+                    },
+                )
+            ]
+        ),
+        _completion(content="Created sleep-graph/index.html."),
+    ]
+
+    events, tools, model = asyncio.run(_run_engine_with_model(script))
+
+    assert model.request_tool_names[1] == [
+        "update_plan",
+        "set_task_graph",
+        "inspect_task_graph",
+    ]
+    graph_limited = set(model.request_tool_names[2])
+    assert "write_text_file" in graph_limited
+    assert "execute_terminal_command" not in graph_limited
+    assert tools.written
+    assert any(
+        event.get("type") == "text" and "sleep-graph" in event.get("content", "")
         for event in events
     )
 

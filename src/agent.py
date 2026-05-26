@@ -69,6 +69,15 @@ from planning import (
     _run_update_plan,
     _store_iteration_cap_memory,
 )
+from task_graph import (
+    GRAPH_CONTROL_TOOLS,
+    INSPECT_TASK_GRAPH_TOOL_NAME,
+    REPAIR_TASK_GRAPH_TOOL_NAME,
+    SET_TASK_GRAPH_TOOL_NAME,
+    UPDATE_TASK_NODE_TOOL_NAME,
+    VERIFY_TASK_GRAPH_TOOL_NAME,
+    TaskGraphEngine,
+)
 from tools import ToolManager
 from toolsets import filter_tools_by_toolset
 
@@ -302,10 +311,26 @@ def _preferred_recovery_tool_name(
         return None
 
     missing = set(status.get("missing") or [])
+    if "task_graph" in missing and SET_TASK_GRAPH_TOOL_NAME in available_tool_names:
+        return SET_TASK_GRAPH_TOOL_NAME
+    if "task_graph_open" in missing:
+        if UPDATE_TASK_NODE_TOOL_NAME in available_tool_names:
+            return UPDATE_TASK_NODE_TOOL_NAME
+        if REPAIR_TASK_GRAPH_TOOL_NAME in available_tool_names:
+            return REPAIR_TASK_GRAPH_TOOL_NAME
+    if "task_graph_proof" in missing:
+        if VERIFY_TASK_GRAPH_TOOL_NAME in available_tool_names:
+            return VERIFY_TASK_GRAPH_TOOL_NAME
+        if UPDATE_TASK_NODE_TOOL_NAME in available_tool_names:
+            return UPDATE_TASK_NODE_TOOL_NAME
     if "plan" in missing and "update_plan" in available_tool_names:
         return "update_plan"
 
-    evidence_missing = [item for item in missing if item not in {"plan", "plan_open_steps"}]
+    evidence_missing = [
+        item
+        for item in missing
+        if item not in {"plan", "plan_open_steps", "task_graph", "task_graph_open", "task_graph_proof"}
+    ]
     if not evidence_missing:
         if "plan_open_steps" in missing and "update_plan" in available_tool_names:
             return "update_plan"
@@ -524,6 +549,8 @@ _PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset(
         "expand_tool_output",
         "set_task_contract",
         "update_plan",
+        "inspect_task_graph",
+        "verify_task_graph",
         # Scheduler / skill registry introspection (read-only)
         "list_scheduled_tasks",
         "list_skills",
@@ -850,7 +877,9 @@ class AgentEngine:
         self._session_store = session_store
         self._approval_gate = approval_gate
         self._evolution_engine = evolution_engine
+        self._task_graph = TaskGraphEngine()
         self._histories: dict[str, list[dict[str, Any]]] = {}
+        self._session_steps: dict[str, list[ExecutionStep]] = {}
 
     def update_models(
         self,
@@ -918,6 +947,7 @@ class AgentEngine:
         # list; the ReAct loop mutates this same list in place, so the assistant
         # and tool turns it produces persist into the next turn automatically.
         messages.append({"role": message.role, "content": message.content})
+        self._session_steps[message.session_id] = []
         self._record_turn(message.session_id, "user", message.content)
 
         final_text = ""
@@ -1040,7 +1070,7 @@ class AgentEngine:
         """
         # One cumulative step log across all batches so completion evidence and
         # duplicate-command detection survive auto-continuation.
-        steps: list[ExecutionStep] = []
+        steps = self._session_steps.setdefault(session_id, [])
         batch = 0
         while True:
             batch += 1
@@ -1095,6 +1125,71 @@ class AgentEngine:
             )
             return
 
+    def _completion_status_with_task_graph(
+        self,
+        contract: dict[str, Any] | None,
+        messages: list[dict[str, Any]],
+        steps: list[ExecutionStep],
+        *,
+        contract_required: bool,
+    ) -> dict[str, Any]:
+        status = _contract_completion_status(
+            contract,
+            messages,
+            steps,
+            contract_required=contract_required,
+        )
+        if contract is None or contract.get("mode") != "execute":
+            return status
+
+        graph_status = self._task_graph.completion_status(messages, steps)
+        status["task_graph"] = graph_status
+        if graph_status.get("source") != "explicit":
+            return status
+
+        # An explicit task graph replaces the old requirement for a loose
+        # update_plan checklist. Contract evidence still gates completion.
+        missing = [
+            item
+            for item in status.get("missing", [])
+            if item not in {"plan", "plan_open_steps"}
+        ]
+        if not graph_status.get("complete"):
+            for item in graph_status.get("missing", []):
+                if item not in missing:
+                    missing.append(item)
+        return {
+            **status,
+            "complete": not missing,
+            "missing": missing,
+            "plan_open": not bool(graph_status.get("complete")),
+        }
+
+    def _tool_names_for_status_with_task_graph(
+        self,
+        contract: dict[str, Any],
+        status: dict[str, Any],
+        messages: list[dict[str, Any]],
+        steps: list[ExecutionStep],
+    ) -> set[str]:
+        graph_status = status.get("task_graph") or {}
+        if graph_status.get("source") == "explicit" and not graph_status.get("complete"):
+            return self._task_graph.allowed_tools_for_next(messages, steps)
+
+        allowed = _tool_names_for_contract_status(contract, status)
+        missing = set(status.get("missing") or [])
+        if "plan" in missing:
+            allowed.update({SET_TASK_GRAPH_TOOL_NAME, INSPECT_TASK_GRAPH_TOOL_NAME})
+        if "task_graph" in missing:
+            allowed.update(GRAPH_CONTROL_TOOLS)
+        return allowed
+
+    def _task_graph_done_count(self, messages: list[dict[str, Any]]) -> int:
+        graph = self._task_graph.latest_graph(messages)
+        if graph is None:
+            return 0
+        return sum(1 for node in graph["nodes"] if node.get("status") == "done")
+
     async def _run_react_batch(
         self,
         session_id: str,
@@ -1116,6 +1211,7 @@ class AgentEngine:
         # Snapshots taken at batch entry so "did THIS batch make progress?" is
         # measurable even though *steps* accumulates across batches.
         batch_start_done_steps = _count_done_plan_steps(messages)
+        batch_start_done_graph_nodes = self._task_graph_done_count(messages)
         batch_start_successes = _count_successful_side_effects(steps)
         tool_schemas = _to_litellm_tools(all_tools)
         # Cache the (large, stable) tool block. Anthropic caches every tool up to
@@ -1156,7 +1252,7 @@ class AgentEngine:
 
                 contract = _latest_task_contract(messages)
                 must_set_contract = contract_required and contract is None
-                completion_status = _contract_completion_status(
+                completion_status = self._completion_status_with_task_graph(
                     contract,
                     messages,
                     steps,
@@ -1191,8 +1287,8 @@ class AgentEngine:
                     )
                 elif needs_execution:
                     assert contract is not None  # needs_execution implies contract is set
-                    allowed_tool_names = _tool_names_for_contract_status(
-                        contract, completion_status
+                    allowed_tool_names = self._tool_names_for_status_with_task_graph(
+                        contract, completion_status, messages, steps
                     )
                     if forced_recovery_tool in allowed_tool_names:
                         allowed_tool_names = {str(forced_recovery_tool)}
@@ -1220,6 +1316,8 @@ class AgentEngine:
                             "content": _build_contract_execution_instruction(
                                 contract, completion_status, messages, steps
                             )
+                            + "\n\n"
+                            + self._task_graph.build_instruction(messages, steps)
                             + recovery_note,
                         },
                     ]
@@ -1306,7 +1404,7 @@ class AgentEngine:
 
                 if choice.finish_reason != "tool_calls" or not assistant_msg.tool_calls:
                     final_response = assistant_msg.content or ""
-                    final_status = _contract_completion_status(
+                    final_status = self._completion_status_with_task_graph(
                         _latest_task_contract(messages),
                         messages,
                         steps,
@@ -1526,7 +1624,7 @@ class AgentEngine:
             )
             # Transient instruction -- kept out of the persisted history so it does
             # not leak into the next turn; only the summary reply is recorded.
-            cap_status = _contract_completion_status(
+            cap_status = self._completion_status_with_task_graph(
                 _latest_task_contract(messages),
                 messages,
                 steps,
@@ -1547,6 +1645,7 @@ class AgentEngine:
                 progressing = (
                     _count_successful_side_effects(steps) > batch_start_successes
                     or _count_done_plan_steps(messages) > batch_start_done_steps
+                    or self._task_graph_done_count(messages) > batch_start_done_graph_nodes
                 )
                 yield {
                     "type": "_batch_incomplete",
@@ -1648,7 +1747,7 @@ class AgentEngine:
                 entities,
             )
 
-        final_contract_status = _contract_completion_status(
+        final_contract_status = self._completion_status_with_task_graph(
             _latest_task_contract(messages),
             messages,
             steps,
@@ -1667,6 +1766,7 @@ class AgentEngine:
                     "iterations": len([s for s in steps if s.kind == "llm_tool_decision"]),
                     "hit_iteration_cap": hit_cap,
                     "available_tools": [t["name"] for t in all_tools],
+                    "task_graph": self._task_graph.inspect(messages, steps),
                 },
             )
             if self._evolution_engine is not None:
@@ -1720,6 +1820,10 @@ class AgentEngine:
             # re-checks, repeated web_fetch/web_search, get_system_environment, etc.
             parallel_to_run: list[tuple[str, str, dict[str, Any]]] = []
             for tc_id, name, args in parallel:
+                graph_block = self._task_graph_tool_block(name, messages, steps)
+                if graph_block is not None:
+                    results[tc_id] = (graph_block, True, "__builtin__")
+                    continue
                 if (
                     name not in _GENERIC_CAP_SKIP_TOOLS
                     and _identical_tool_call_runs_since_state_change(steps, name, args)
@@ -1735,7 +1839,7 @@ class AgentEngine:
 
             gathered = await asyncio.gather(
                 *(
-                    self._execute_single_tool(name, args, messages, tool_index, session_id)
+                    self._execute_single_tool(name, args, messages, steps, tool_index, session_id)
                     for (_, name, args) in parallel_to_run
                 )
             )
@@ -1762,8 +1866,14 @@ class AgentEngine:
                 if cmd
                 else 0
             )
-            if _should_block_tool_for_action_task(
-                _latest_task_contract(messages), messages, steps, name
+            graph_block = self._task_graph_tool_block(name, messages, steps)
+            if graph_block is not None:
+                results[tc_id] = (graph_block, True, "__builtin__")
+            elif (
+                not self._task_graph_explicitly_allows(name, messages, steps)
+                and _should_block_tool_for_action_task(
+                    _latest_task_contract(messages), messages, steps, name
+                )
             ):
                 results[tc_id] = (_blocked_action_tool_message(name), True, "__builtin__")
             elif (
@@ -1807,7 +1917,9 @@ class AgentEngine:
                 # reads): identical call, no state change, no new information.
                 results[tc_id] = (_repeated_tool_call_message(name, args), True, "__builtin__")
             else:
-                results[tc_id] = await self._execute_single_tool(name, args, messages, tool_index, session_id)
+                results[tc_id] = await self._execute_single_tool(
+                    name, args, messages, steps, tool_index, session_id
+                )
                 if cmd:
                     last_host_cmd = cmd
                     local_repeat_counts[cmd] = local_repeat_counts.get(cmd, 0) + 1
@@ -1853,6 +1965,7 @@ class AgentEngine:
         tool_name: str,
         arguments: dict[str, Any],
         messages: list[dict[str, Any]],
+        steps: list[ExecutionStep],
         tool_index: dict[str, str],
         session_id: str = "unknown",
     ) -> tuple[str, bool, str | None]:
@@ -1995,6 +2108,19 @@ class AgentEngine:
         if tool_name == "update_plan":
             content, is_error = _run_update_plan(arguments)
             return content, is_error, "__builtin__"
+        if tool_name == SET_TASK_GRAPH_TOOL_NAME:
+            content, is_error = self._task_graph.run_set_task_graph(arguments)
+            return content, is_error, "__builtin__"
+        if tool_name == INSPECT_TASK_GRAPH_TOOL_NAME:
+            return json.dumps(self._task_graph.inspect(messages, steps), indent=2), False, "__builtin__"
+        if tool_name == UPDATE_TASK_NODE_TOOL_NAME:
+            content, is_error = self._task_graph.run_update_task_node(arguments, messages, steps)
+            return content, is_error, "__builtin__"
+        if tool_name == REPAIR_TASK_GRAPH_TOOL_NAME:
+            content, is_error = self._task_graph.run_repair_task_graph(arguments, messages, steps)
+            return content, is_error, "__builtin__"
+        if tool_name == VERIFY_TASK_GRAPH_TOOL_NAME:
+            return json.dumps(self._task_graph.verify(messages, steps), indent=2), False, "__builtin__"
         if tool_name == _TASK_CONTRACT_TOOL:
             content, is_error = _run_set_task_contract(arguments)
             return content, is_error, "__builtin__"
@@ -2189,6 +2315,45 @@ class AgentEngine:
         return json.dumps(
             self._evolution_engine.rollback(str(arguments["candidate_id"])),
             indent=2,
+        )
+
+    def _task_graph_tool_block(
+        self,
+        tool_name: str,
+        messages: list[dict[str, Any]],
+        steps: list[ExecutionStep],
+    ) -> str | None:
+        contract = _latest_task_contract(messages)
+        if contract is None or contract.get("mode") != "execute":
+            return None
+        graph_status = self._task_graph.completion_status(messages, steps)
+        if graph_status.get("source") != "explicit" or graph_status.get("complete"):
+            return None
+        allowed = self._task_graph.allowed_tools_for_next(messages, steps)
+        if tool_name in allowed or tool_name == _TASK_CONTRACT_TOOL:
+            return None
+        active = graph_status.get("active_node") or {}
+        return (
+            f"[task_graph blocked] Tool {tool_name!r} is not allowed for the current "
+            f"task graph node {active.get('id', 'unknown')!r}. Work only the active "
+            "ready node, use its allowed_tools, then call update_task_node with "
+            "real evidence_refs."
+        )
+
+    def _task_graph_explicitly_allows(
+        self,
+        tool_name: str,
+        messages: list[dict[str, Any]],
+        steps: list[ExecutionStep],
+    ) -> bool:
+        contract = _latest_task_contract(messages)
+        if contract is None or contract.get("mode") != "execute":
+            return False
+        graph_status = self._task_graph.completion_status(messages, steps)
+        return bool(
+            graph_status.get("source") == "explicit"
+            and not graph_status.get("complete")
+            and tool_name in self._task_graph.allowed_tools_for_next(messages, steps)
         )
 
     async def _create_skill(self, arguments: dict[str, Any]) -> str:
@@ -2506,7 +2671,37 @@ class AgentEngine:
         Returns ``True`` if a session existed and was cleared. Used by the
         messaging adapters' ``/new`` / ``/reset`` commands.
         """
-        return self._histories.pop(session_id, None) is not None
+        existed = self._histories.pop(session_id, None) is not None
+        self._session_steps.pop(session_id, None)
+        return existed
+
+    def task_graph_snapshot(self, session_id: str) -> dict[str, Any] | None:
+        messages = self._histories.get(session_id)
+        if messages is None:
+            return None
+        return self._task_graph.inspect(messages, self._session_steps.get(session_id, []))
+
+    def verify_task_graph(self, session_id: str) -> dict[str, Any] | None:
+        messages = self._histories.get(session_id)
+        if messages is None:
+            return None
+        return self._task_graph.verify(messages, self._session_steps.get(session_id, []))
+
+    def task_graph_status_summary(self) -> dict[str, Any]:
+        active = 0
+        blocked = 0
+        open_nodes = 0
+        for session_id, messages in self._histories.items():
+            snapshot = self._task_graph.inspect(
+                messages, self._session_steps.get(session_id, [])
+            )
+            if not snapshot.get("has_graph"):
+                continue
+            active += 1
+            blocked += len(snapshot.get("blocked_nodes", []))
+            summary = snapshot.get("summary") or {}
+            open_nodes += int(summary.get("open") or 0)
+        return {"active": active, "blocked": blocked, "open_nodes": open_nodes}
 
     def _touch_history(self, session_id: str) -> list[dict[str, Any]] | None:
         """Return the session's history, marking it most-recently-used (LRU)."""
@@ -2520,6 +2715,7 @@ class AgentEngine:
         while len(self._histories) > _MAX_SESSIONS:
             oldest = next(iter(self._histories))
             self._histories.pop(oldest, None)
+            self._session_steps.pop(oldest, None)
 
     async def _fetch_context(self, query: str) -> dict[str, Any]:
         try:

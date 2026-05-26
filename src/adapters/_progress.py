@@ -15,6 +15,11 @@ _SILENT_TOOLS: frozenset[str] = frozenset(
     {
         "set_task_contract",
         "update_plan",
+        "set_task_graph",
+        "inspect_task_graph",
+        "update_task_node",
+        "repair_task_graph",
+        "verify_task_graph",
         "get_system_environment",
         "get_filesystem_process_evidence",
         "expand_tool_output",

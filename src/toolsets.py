@@ -39,6 +39,11 @@ _SAFE_TOOLS: frozenset[str] = frozenset(
         "expand_tool_output",
         "set_task_contract",
         "update_plan",
+        "set_task_graph",
+        "inspect_task_graph",
+        "update_task_node",
+        "repair_task_graph",
+        "verify_task_graph",
         # MCP filesystem (read-only)
         "list_directory",
         "directory_tree",
@@ -107,6 +112,11 @@ _ALWAYS_TOOLS: frozenset[str] = frozenset(
         "inspect_evolution_candidate",
         "run_evolution_cycle",
         "rollback_evolution_candidate",
+        "set_task_graph",
+        "inspect_task_graph",
+        "update_task_node",
+        "repair_task_graph",
+        "verify_task_graph",
     }
 )
 

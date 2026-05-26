@@ -647,6 +647,7 @@ async def status() -> dict[str, Any]:
             "enabled": sum(1 for j in jobs if j.get("enabled")),
         },
         "evolution": evolution["candidates"],
+        "task_graph": engine.task_graph_status_summary(),
         "active_sessions": len(app.state.gateway.active_sessions),
     }
 
@@ -690,6 +691,27 @@ async def get_logs(level: str = "ALL", limit: int = 200) -> list[dict[str, Any]]
 async def clear_logs() -> dict[str, str]:
     _log_buffer.clear()
     return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Proof-carrying task graph API
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/task-graph/{session_id}")
+async def get_task_graph(session_id: str) -> dict[str, Any]:
+    snapshot = app.state.engine.task_graph_snapshot(session_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    return snapshot
+
+
+@app.post("/api/task-graph/{session_id}/verify")
+async def verify_task_graph(session_id: str) -> dict[str, Any]:
+    result = app.state.engine.verify_task_graph(session_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id!r} not found")
+    return result
 
 
 # ---------------------------------------------------------------------------
