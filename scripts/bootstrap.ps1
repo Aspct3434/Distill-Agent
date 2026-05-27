@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $DefaultRepoUrl = "https://github.com/Aspct3434/agent-ai.git"
 if ([string]::IsNullOrWhiteSpace($RepoUrl)) { $RepoUrl = $DefaultRepoUrl }
 if ([string]::IsNullOrWhiteSpace($Branch)) { $Branch = "master" }
-if ([string]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = Join-Path $HOME "agent-ai" }
+if ([string]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = Join-Path $HOME "distill" }
 
 function Step([string]$Message) { Write-Host "==> $Message" }
 function Has-Command([string]$Name) { return [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
@@ -67,7 +67,7 @@ function Is-AgentRepo([string]$Path) {
 function Ensure-Repo {
     if (Test-Path $InstallDir) {
         if (Is-AgentRepo $InstallDir) {
-            Step "Found existing Agent AI checkout at $InstallDir"
+            Step "Found existing Distill checkout at $InstallDir"
             if (-not $NoUpdate) {
                 Run-Cmd "Fetch latest repo changes" "git" @("-C", $InstallDir, "fetch", "origin", $Branch)
                 Run-Cmd "Checkout selected branch" "git" @("-C", $InstallDir, "checkout", $Branch)
@@ -76,14 +76,14 @@ function Ensure-Repo {
             return
         }
         $items = Get-ChildItem -Force -Path $InstallDir -ErrorAction SilentlyContinue
-        if ($items.Count -gt 0) { throw "InstallDir exists but is not an Agent AI checkout: $InstallDir" }
+        if ($items.Count -gt 0) { throw "InstallDir exists but is not a Distill checkout: $InstallDir" }
     }
     else {
         $parent = Split-Path -Parent $InstallDir
         if ($DryRun) { Write-Host "[dry-run] New-Item -ItemType Directory -Force -Path $parent" }
         else { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
     }
-    Run-Cmd "Clone Agent AI repository" "git" @("clone", "--branch", $Branch, $RepoUrl, $InstallDir)
+    Run-Cmd "Clone Distill repository" "git" @("clone", "--branch", $Branch, $RepoUrl, $InstallDir)
 }
 
 function Run-Installer {
@@ -95,10 +95,10 @@ function Run-Installer {
     if ($Messaging) { $args.Add("-Messaging"); $args.Add($Messaging) }
     if ($DryRun) { $args.Add("-DryRun") }
     if ($NoStart) { $args.Add("-NoStart") }
-    Run-Cmd "Run Agent AI installer" "powershell" $args.ToArray()
+    Run-Cmd "Run Distill installer" "powershell" $args.ToArray()
 }
 
-Write-Host "Agent AI bootstrap installer"
+Write-Host "Distill bootstrap installer"
 Write-Host "Install directory: $InstallDir"
 Write-Host "Repository:        $RepoUrl"
 Write-Host "Branch:            $Branch"

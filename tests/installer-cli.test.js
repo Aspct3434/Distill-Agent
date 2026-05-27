@@ -5,7 +5,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..");
-const bin = path.join(root, "bin", "agent-ai.js");
+const bin = path.join(root, "bin", "distill.js");
 
 function run(args, input = "") {
   return spawnSync(process.execPath, [bin, ...args], {
@@ -33,7 +33,7 @@ function runWithEnv(args, env, input = "") {
 }
 
 function tempInstallDir(name) {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "agent-ai-cli-")), name);
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "distill-cli-")), name);
 }
 
 function assertIncludes(text, expected) {
@@ -60,14 +60,14 @@ function assertIncludes(text, expected) {
     "none"
   ]);
   assert.strictEqual(result.status, 0, result.stderr);
-  assertIncludes(result.stdout, "AGENT AI");
-  assertIncludes(result.stdout, "[ Security ]");
+  assertIncludes(result.stdout, "DISTILL");
+  assertIncludes(result.stdout, "Security Notice");
   assertIncludes(result.stdout, "[dry-run] git clone --branch master https://github.com/Aspct3434/agent-ai.git");
   assertIncludes(result.stdout, 'AGENT_MODEL="gpt-4o"');
   assertIncludes(result.stdout, 'AGENT_SANDBOX_HOST_FALLBACK="false"');
-  assertIncludes(result.stdout, "Start later with: npx @aspct3434/agent-ai start");
-  assertIncludes(result.stdout, "QuickStart setup summary");
-  assertIncludes(result.stdout, "Model API key:     missing");
+  assertIncludes(result.stdout, "Start later with: npx @aspct3434/distill-agent start");
+  assertIncludes(result.stdout, "Installation Summary");
+  assertIncludes(result.stdout, "missing");
 }
 
 {
@@ -86,14 +86,15 @@ function assertIncludes(text, expected) {
     "--sandbox",
     "off",
     "--messaging",
-    "both"
+    "all"
   ]);
   assert.strictEqual(result.status, 0, result.stderr);
   assertIncludes(result.stdout, 'OPENAI_API_BASE="http://localhost:8001/v1"');
   assertIncludes(result.stdout, 'AGENT_SANDBOX_HOST_FALLBACK="true"');
   assertIncludes(result.stdout, "TELEGRAM_BOT_TOKEN=");
   assertIncludes(result.stdout, "DISCORD_BOT_TOKEN=");
-  assertIncludes(result.stdout, "WARN TELEGRAM_BOT_TOKEN is blank.");
+  assertIncludes(result.stdout, "SLACK_BOT_TOKEN=");
+  assertIncludes(result.stdout, "EMAIL_ADDRESS=");
 }
 
 {
@@ -127,14 +128,14 @@ function assertIncludes(text, expected) {
 {
   const result = run(["help"]);
   assert.strictEqual(result.status, 0, result.stderr);
-  assertIncludes(result.stdout, "agent-ai install");
-  assertIncludes(result.stdout, "npx @aspct3434/agent-ai install");
-  assertIncludes(result.stdout, "npx @aspct3434/agent-ai doctor");
+  assertIncludes(result.stdout, "distill install");
+  assertIncludes(result.stdout, "npx @aspct3434/distill-agent install");
+  assertIncludes(result.stdout, "npx @aspct3434/distill-agent doctor");
 }
 
 {
-  const { __testing } = require(path.join(root, "lib", "agent-ai-cli.js"));
-  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-ai-fake-python-"));
+  const { __testing } = require(path.join(root, "lib", "distill-cli.js"));
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), "distill-fake-python-"));
   const workingPython = path.join(fakeDir, "working-python.js");
   const brokenPython = path.join(fakeDir, "broken-python.js");
   fs.writeFileSync(
@@ -162,10 +163,10 @@ function assertIncludes(text, expected) {
 }
 
 // Secret prompts echo one "*" per character on an interactive terminal so the
-// user gets visible feedback without revealing the token (OpenClaw-style).
+// user gets visible feedback without revealing the token.
 {
   const { EventEmitter } = require("events");
-  const { Prompter } = require(path.join(root, "lib", "agent-ai-cli.js"));
+  const { Prompter } = require(path.join(root, "lib", "distill-cli.js"));
 
   const input = new EventEmitter();
   input.isTTY = true;

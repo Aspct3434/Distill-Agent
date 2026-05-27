@@ -1,9 +1,9 @@
 {
-  "name": "@aspct3434/agent-ai",
-  "version": "0.1.6",
-  "description": "OpenClaw-style onboarding installer and lifecycle CLI for Agent AI.",
+  "name": "@aspct3434/distill-agent",
+  "version": "0.2.0",
+  "description": "Distill — interactive installer and lifecycle CLI for the Distill autonomous agent framework.",
   "bin": {
-    "agent-ai": "bin/agent-ai.js"
+    "distill": "bin/distill.js"
   },
   "scripts": {
     "test": "node tests/installer-cli.test.js",
@@ -15,9 +15,15 @@
     "README.md"
   ],
   "keywords": [
+    "distill",
     "agent",
+    "ai",
+    "autonomous-agents",
+    "llm",
+    "react-agent",
+    "mcp",
+    "skill-distillation",
     "installer",
-    "onboarding",
     "cli"
   ],
   "repository": {
