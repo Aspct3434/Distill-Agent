@@ -28,9 +28,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi mcp-server-sqlite aiosqlite httpx litellm pydantic \
-                      pytest pytest-asyncio pytest-cov hypothesis \
-                      duckduckgo-search playwright
+          pip install fastapi mcp-server-sqlite aiosqlite httpx litellm pydantic pytest pytest-asyncio pytest-cov hypothesis duckduckgo-search playwright
 
       - name: Install Playwright Chromium browser
         run: playwright install chromium --with-deps
@@ -68,11 +66,7 @@ jobs:
         # This step is a HARD gate (no continue-on-error): any test failure or a
         # coverage drop below the fail_under threshold fails the build.
         run: |
-          pytest tests/ -v --tb=short \
-            --ignore=tests/test_end_to_end.py \
-            --ignore=tests/test_memory.py \
-            --ignore=tests/test_swarm.py \
-            --cov=src --cov-report=term-missing --cov-report=xml
+          pytest tests/ -v --tb=short --ignore=tests/test_end_to_end.py --ignore=tests/test_memory.py --ignore=tests/test_swarm.py --cov=src --cov-report=term-missing --cov-report=xml
         env:
           PYTHONPATH: src
 
