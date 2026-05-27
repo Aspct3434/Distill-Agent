@@ -259,18 +259,19 @@ class TelegramAdapter:
 
         text: str = (message.get("text") or "").strip()
         chat_id: int = int(message["chat"]["id"])
+        message_id: int = int(message.get("message_id") or 0)
         from_user: dict[str, Any] = message.get("from") or {}
         user_id: int = int(from_user.get("id") or 0)
 
         # /start is a friendly greeting available to anyone who can reach the bot.
         if text == "/start":
-            await self._send_message(chat_id, _WELCOME)
+            await self._send_message(chat_id, _WELCOME, reply_to_message_id=message_id)
             return
 
         # Allowlist gate for everything that follows (incl. costly transcription).
         if self._allowed is not None and user_id not in self._allowed:
             if text:
-                await self._send_message(chat_id, "Access denied.")
+                await self._send_message(chat_id, "Access denied.", reply_to_message_id=message_id)
             return
 
         # Voice / audio note → transcribe it into text and continue as usual.
@@ -283,13 +284,13 @@ class TelegramAdapter:
 
         # Slash commands are handled out-of-band (so /stop can interrupt a turn).
         if text.startswith("/"):
-            await self._handle_command(chat_id, text)
+            await self._handle_command(chat_id, text, message_id)
             return
 
         # Normal message → run a streamed turn that /stop can cancel.
         async with self._chat_lock(chat_id):
             task = asyncio.create_task(
-                self._run_turn(chat_id, text), name=f"tg:turn:{chat_id}"
+                self._run_turn(chat_id, text, message_id), name=f"tg:turn:{chat_id}"
             )
             self._turn_tasks[chat_id] = task
             try:
@@ -299,24 +300,24 @@ class TelegramAdapter:
             finally:
                 self._turn_tasks.pop(chat_id, None)
 
-    async def _handle_command(self, chat_id: int, text: str) -> None:
+    async def _handle_command(self, chat_id: int, text: str, message_id: int = 0) -> None:
         """Handle an in-chat slash command (/new, /reset, /stop, /help)."""
         cmd = text.split(maxsplit=1)[0].lower()
         if cmd in ("/new", "/reset"):
             self._reset_fn(f"tg:{chat_id}")
-            await self._send_message(chat_id, "🧹 Started a new conversation.")
+            await self._send_message(chat_id, "🧹 Started a new conversation.", reply_to_message_id=message_id)
         elif cmd == "/stop":
             task = self._turn_tasks.get(chat_id)
             if task is not None and not task.done():
                 task.cancel()
             else:
-                await self._send_message(chat_id, "Nothing is running.")
+                await self._send_message(chat_id, "Nothing is running.", reply_to_message_id=message_id)
         elif cmd == "/help":
-            await self._send_message(chat_id, _HELP)
+            await self._send_message(chat_id, _HELP, reply_to_message_id=message_id)
         else:
-            await self._send_message(chat_id, f"Unknown command {cmd}. Type /help.")
+            await self._send_message(chat_id, f"Unknown command {cmd}. Type /help.", reply_to_message_id=message_id)
 
-    async def _run_turn(self, chat_id: int, text: str) -> None:
+    async def _run_turn(self, chat_id: int, text: str, message_id: int = 0) -> None:
         """Stream the agent's work to the chat: a live 'typing…' status, a
         concise line per tool the agent runs, then the final answer.
         """
@@ -346,7 +347,7 @@ class TelegramAdapter:
             with suppress(asyncio.CancelledError):
                 await typing
 
-        await self._send_rich(chat_id, final)
+        await self._send_rich(chat_id, final, reply_to_message_id=message_id)
 
     def _chat_lock(self, chat_id: int) -> asyncio.Lock:
         lock = self._locks.get(chat_id)
@@ -429,7 +430,7 @@ class TelegramAdapter:
         """Send a (possibly long) message to a chat — used for scheduled delivery."""
         await self._send_rich(chat_id, text)
 
-    async def _send_rich(self, chat_id: int, markdown: str) -> None:
+    async def _send_rich(self, chat_id: int, markdown: str, reply_to_message_id: int = 0) -> None:
         """Render the agent's Markdown as Telegram HTML and send it in chunks.
 
         Each chunk is sent with ``parse_mode=HTML`` so bold, code blocks,
@@ -441,10 +442,10 @@ class TelegramAdapter:
         if not markdown:
             return
         for chunk in render_telegram_html_chunks(markdown):
-            await self._send_message(chat_id, chunk, parse_mode="HTML")
+            await self._send_message(chat_id, chunk, parse_mode="HTML", reply_to_message_id=reply_to_message_id)
 
     async def _send_message(
-        self, chat_id: int, text: str, *, parse_mode: str | None = None
+        self, chat_id: int, text: str, *, parse_mode: str | None = None, reply_to_message_id: int = 0
     ) -> None:
         """POST a message to a Telegram chat; logs warnings on failure.
 
@@ -456,6 +457,8 @@ class TelegramAdapter:
         payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if parse_mode:
             payload["parse_mode"] = parse_mode
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
         try:
             resp = await self._http.post(
                 f"{self._base}/sendMessage", json=payload, timeout=15.0
