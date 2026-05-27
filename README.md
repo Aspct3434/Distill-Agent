@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/distill-tui-logo.svg" alt="Distill TUI" width="760">
+</p>
+
 # Distill
 
 A production-grade ReAct agent built for reliability. Features **task-contract execution** to prevent hallucination, **skill distillation** to evolve its own tools, **hybrid memory**, and a real-time streaming control panel.
