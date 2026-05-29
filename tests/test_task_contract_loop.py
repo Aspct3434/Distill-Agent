@@ -1236,3 +1236,87 @@ def test_no_progress_guard_pauses_varied_tool_loop(monkeypatch: pytest.MonkeyPat
         for message in request
     )
     assert len(tools.commands) == 3
+
+
+def test_no_progress_guard_tolerates_genuine_side_effect_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """State-changing work each turn must not be mistaken for a stall.
+
+    Mirrors :func:`test_no_progress_guard_pauses_varied_tool_loop` but the
+    commands actually change state. Even though no contract requirement or
+    task-graph node flips to "done" until the final write, each turn produces a
+    new successful side effect, so the per-iteration progress signal advances and
+    the pause must NOT fire before the artifact is written. This is the general
+    fix: progress = completion advanced OR new durable work, matching the
+    batch-level "progressing" signal.
+    """
+    monkeypatch.setattr(agent_module, "_NO_PROGRESS_ITERATION_LIMIT", 3)
+    monkeypatch.setattr(agent_module, "_OBSTACLE_RECOVERY_AFTER_STALLED_ITERATIONS", 2)
+    script = [
+        _completion(tool_calls=[_contract_tool("execute", ["filesystem_artifact"])]),
+        _completion(tool_calls=[_plan_tool("in_progress")]),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_step_1",
+                    "execute_terminal_command",
+                    {"command": "mkdir -p /tmp/site", "changes_state": True},
+                )
+            ]
+        ),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_step_2",
+                    "execute_terminal_command",
+                    {"command": "apt-get install -y nginx", "changes_state": True},
+                )
+            ]
+        ),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_step_3",
+                    "execute_terminal_command",
+                    {"command": "curl -O https://example.com/asset.bin", "changes_state": True},
+                )
+            ]
+        ),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_write",
+                    "write_text_file",
+                    {
+                        "path": "/tmp/site/index.html",
+                        "content": "<!doctype html><title>Site</title>",
+                    },
+                )
+            ]
+        ),
+        _completion(tool_calls=[_plan_tool("done")]),
+        _completion(content="Created /tmp/site/index.html"),
+    ]
+
+    events, tools, model = asyncio.run(_run_engine_with_model(script))
+
+    # The three state-changing turns came before any contract/graph completion,
+    # yet the pause must not have fired: each was genuine new progress.
+    assert not any(
+        event.get("type") == "final_answer" and event.get("reason") == "no_progress"
+        for event in events
+    )
+    assert not any(
+        "OBSTACLE RECOVERY MODE" in str(message.get("content", ""))
+        for request in model.request_messages
+        for message in request
+    )
+    # It ran all three steps, wrote the artifact, and finished normally.
+    assert len(tools.commands) == 3
+    assert tools.written
+    assert any(
+        event.get("type") == "text"
+        and "/tmp/site/index.html" in event.get("content", "")
+        for event in events
+    )

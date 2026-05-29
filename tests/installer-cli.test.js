@@ -222,3 +222,38 @@ function assertIncludes(text, expected) {
     process.exit(1);
   });
 }
+
+// Local-mode start must refuse to launch when a port is already held, instead
+// of spawning a second instance that fails to bind (the EADDRINUSE collision).
+{
+  const net = require("net");
+  const { __testing } = require(path.join(root, "lib", "distill-cli.js"));
+  const PORT = 53999;
+
+  (async () => {
+    try {
+      // Free port → reported bindable quickly.
+      assert.strictEqual(await __testing.waitForPortFree(PORT, 1000), true,
+        "an unused port should be reported free");
+
+      const server = net.createServer();
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(PORT, "0.0.0.0", resolve);
+      });
+
+      // Held port → reported busy (no infinite wait).
+      assert.strictEqual(await __testing.waitForPortFree(PORT, 300), false,
+        "a held port should be reported busy");
+
+      // dry-run skips the check entirely.
+      await __testing.assertPortsAvailableForLocal({ dryRun: true });
+
+      server.close();
+      console.log("port-guard tests passed");
+    } catch (err) {
+      console.error(err);
+      process.exit(1);
+    }
+  })();
+}

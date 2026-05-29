@@ -1170,6 +1170,14 @@ class _ContractProgressFingerprint:
     plan_open: bool
     done_plan_steps: int
     done_task_graph_nodes: int
+    # Count of successful, state-changing tool results so far. A turn that
+    # produces genuinely new durable work (a file written, a command that
+    # mutated state, a service started) counts as progress even when it has not
+    # yet flipped a contract requirement or task-graph node to "done". This
+    # mirrors the batch-level "progressing" signal so the pause detector only
+    # fires on real spin (repeated/failing actions that change nothing), not on
+    # multi-step work whose proof node closes only at the end.
+    successful_side_effects: int
 
 
 class _NoProgressTracker:
@@ -1723,6 +1731,7 @@ class AgentEngine:
         self,
         status: dict[str, Any],
         messages: list[dict[str, Any]],
+        steps: list[ExecutionStep],
     ) -> _ContractProgressFingerprint:
         missing = tuple(sorted(str(item) for item in status.get("missing") or []))
         return _ContractProgressFingerprint(
@@ -1730,6 +1739,7 @@ class AgentEngine:
             plan_open=bool(status.get("plan_open")),
             done_plan_steps=_count_done_plan_steps(messages),
             done_task_graph_nodes=self._task_graph_done_count(messages),
+            successful_side_effects=_count_successful_side_effects(steps),
         )
 
     def _build_no_progress_pause_message(
@@ -1953,7 +1963,7 @@ class AgentEngine:
                     and not completion_status["complete"]
                 )
                 progress_before = (
-                    self._contract_progress_fingerprint(completion_status, messages)
+                    self._contract_progress_fingerprint(completion_status, messages, steps)
                     if needs_execution
                     else None
                 )
@@ -2270,7 +2280,7 @@ class AgentEngine:
                         contract_required=contract_required,
                     )
                     progress_after = self._contract_progress_fingerprint(
-                        progress_status, messages
+                        progress_status, messages, steps
                     )
                     if no_progress_tracker.observe(progress_before, progress_after):
                         yield {"type": "status", "message": "Summarising progress..."}
