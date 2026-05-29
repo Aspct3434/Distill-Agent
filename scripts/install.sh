@@ -331,22 +331,22 @@ case "$provider" in
     ollama_base="$(prompt_value 'Ollama API base, blank for default' '')"
     ;;
   openrouter)
-    agent_model="$(choose_model 'OpenRouter' 'openrouter/meta-llama/llama-3.3-70b-instruct' 'openrouter/anthropic/claude-sonnet-4-5' 'openrouter/openai/gpt-4o')"; fast_model="$agent_model"; strong_model="$agent_model"
+    agent_model="$(choose_model 'OpenRouter' 'openrouter/meta-llama/llama-3.3-70b-instruct' 'openrouter/anthropic/claude-sonnet-4-6' 'openrouter/anthropic/claude-opus-4-8' 'openrouter/openai/gpt-4o')"; fast_model="$agent_model"; strong_model="$agent_model"
     openrouter_key="$(prompt_secret OPENROUTER_API_KEY 'OpenRouter API key')"
     ;;
   openai)
-    agent_model="$(choose_model 'OpenAI' 'gpt-4o' 'gpt-4o-mini' 'gpt-4.1' 'o3-mini')"; fast_model="$agent_model"; strong_model="$agent_model"
+    agent_model="$(choose_model 'OpenAI' 'gpt-4o' 'gpt-4o-mini' 'gpt-4.1' 'gpt-4.1-mini' 'o3' 'o4-mini' 'o3-mini')"; fast_model="$agent_model"; strong_model="$agent_model"
     openai_auth_method="$(choose_openai_auth)"
     if [[ "$openai_auth_method" == "apikey" ]]; then
       openai_key="$(prompt_secret OPENAI_API_KEY 'OpenAI API key')"
     fi
     ;;
   anthropic)
-    agent_model="$(choose_model 'Anthropic' 'claude-sonnet-4-5' 'claude-opus-4-1' 'claude-3-5-haiku-latest')"; fast_model="$agent_model"; strong_model="$agent_model"
+    agent_model="$(choose_model 'Anthropic' 'claude-sonnet-4-6' 'claude-opus-4-8' 'claude-haiku-4-5' 'claude-sonnet-4-5' 'claude-opus-4-1' 'claude-3-5-haiku-latest')"; fast_model="$agent_model"; strong_model="$agent_model"
     anthropic_key="$(prompt_secret ANTHROPIC_API_KEY 'Anthropic API key')"
     ;;
   gemini)
-    agent_model="$(choose_model 'Gemini' 'gemini/gemini-2.0-flash' 'gemini/gemini-2.5-pro' 'gemini/gemini-2.0-flash-lite')"; fast_model="$agent_model"; strong_model="$agent_model"
+    agent_model="$(choose_model 'Gemini' 'gemini/gemini-2.5-flash' 'gemini/gemini-2.5-pro' 'gemini/gemini-2.0-flash' 'gemini/gemini-2.0-flash-lite')"; fast_model="$agent_model"; strong_model="$agent_model"
     gemini_key="$(prompt_secret GEMINI_API_KEY 'Gemini API key')"
     ;;
   vllm)
@@ -418,7 +418,17 @@ if [[ "$NO_START" -eq 0 ]]; then
     python_bin="$(ensure_python)"
     mkdir -p "$ROOT_DIR/logs"
     ensure_project_venv "$python_bin"
-    (cd "$ROOT_DIR" && .run-venv/bin/python -m pip install --upgrade pip && .run-venv/bin/python -m pip install -r requirements.txt)
+    # uv resolves and downloads in parallel with a global cache; far faster than
+    # pip for the heavy ML wheels (torch, transformers, etc.). Prefer a system uv;
+    # otherwise bootstrap it into the venv (tiny wheel) so a fresh machine still
+    # gets the fast install. Fall back to plain pip if uv can't be installed.
+    if command -v uv >/dev/null 2>&1; then
+      (cd "$ROOT_DIR" && uv pip install -r requirements.txt --python .run-venv/bin/python)
+    elif (cd "$ROOT_DIR" && .run-venv/bin/python -m pip install --upgrade pip uv); then
+      (cd "$ROOT_DIR" && .run-venv/bin/python -m uv pip install -r requirements.txt --python .run-venv/bin/python)
+    else
+      (cd "$ROOT_DIR" && .run-venv/bin/python -m pip install -r requirements.txt)
+    fi
     (cd "$ROOT_DIR" && . .run-venv/bin/activate && set -a && . "$ENV_FILE" && set +a && nohup python -m uvicorn gateway:app --app-dir src --host 127.0.0.1 --port 8000 > logs/backend-local.stdout.log 2> logs/backend-local.stderr.log &)
     (cd "$ROOT_DIR/control-panel" && npm ci && nohup npm run dev -- --host 127.0.0.1 --port 5173 > ../logs/control-panel-dev.stdout.log 2> ../logs/control-panel-dev.stderr.log &)
   fi

@@ -179,13 +179,13 @@ switch ($ProviderChoice) {
         $OllamaBase = Prompt-Value "Ollama API base, blank for default" ""
     }
     "openrouter" {
-        $AgentModel = Choose-Model "OpenRouter" @("openrouter/meta-llama/llama-3.3-70b-instruct", "openrouter/anthropic/claude-sonnet-4-5", "openrouter/openai/gpt-4o")
+        $AgentModel = Choose-Model "OpenRouter" @("openrouter/meta-llama/llama-3.3-70b-instruct", "openrouter/anthropic/claude-sonnet-4-6", "openrouter/anthropic/claude-opus-4-8", "openrouter/openai/gpt-4o")
         $FastModel = $AgentModel
         $StrongModel = $AgentModel
         $OpenRouterKey = Prompt-Secret "OPENROUTER_API_KEY" "OpenRouter API key"
     }
     "openai" {
-        $AgentModel = Choose-Model "OpenAI" @("gpt-4o", "gpt-4o-mini", "gpt-4.1", "o3-mini")
+        $AgentModel = Choose-Model "OpenAI" @("gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini", "o3-mini")
         $FastModel = $AgentModel
         $StrongModel = $AgentModel
         $OpenAIAuthMethod = Choose-OpenAIAuth
@@ -194,13 +194,13 @@ switch ($ProviderChoice) {
         }
     }
     "anthropic" {
-        $AgentModel = Choose-Model "Anthropic" @("claude-sonnet-4-5", "claude-opus-4-1", "claude-3-5-haiku-latest")
+        $AgentModel = Choose-Model "Anthropic" @("claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1", "claude-3-5-haiku-latest")
         $FastModel = $AgentModel
         $StrongModel = $AgentModel
         $AnthropicKey = Prompt-Secret "ANTHROPIC_API_KEY" "Anthropic API key"
     }
     "gemini" {
-        $AgentModel = Choose-Model "Gemini" @("gemini/gemini-2.0-flash", "gemini/gemini-2.5-pro", "gemini/gemini-2.0-flash-lite")
+        $AgentModel = Choose-Model "Gemini" @("gemini/gemini-2.5-flash", "gemini/gemini-2.5-pro", "gemini/gemini-2.0-flash", "gemini/gemini-2.0-flash-lite")
         $FastModel = $AgentModel
         $StrongModel = $AgentModel
         $GeminiKey = Prompt-Secret "GEMINI_API_KEY" "Gemini API key"
@@ -300,8 +300,24 @@ if (-not $NoStart) {
         try {
             py -3 -m venv .run-venv
             $venvPython = Join-Path $RootDir ".run-venv\Scripts\python.exe"
-            & $venvPython -m pip install --upgrade pip
-            & $venvPython -m pip install -r requirements.txt
+            if (Get-Command uv -ErrorAction SilentlyContinue) {
+                # uv resolves and downloads in parallel with a global cache; far
+                # faster than pip for the heavy ML wheels (torch, transformers, etc.).
+                & uv pip install -r requirements.txt --python $venvPython
+            }
+            else {
+                # No system uv: bootstrap it into the venv (tiny wheel) so a fresh
+                # machine still gets the fast parallel install. Fall back to pip if
+                # uv itself can't be installed.
+                & $venvPython -m pip install --upgrade pip
+                & $venvPython -m pip install uv
+                if ($LASTEXITCODE -eq 0) {
+                    & $venvPython -m uv pip install -r requirements.txt --python $venvPython
+                }
+                else {
+                    & $venvPython -m pip install -r requirements.txt
+                }
+            }
             Start-Process -FilePath $venvPython -ArgumentList @("-m", "uvicorn", "gateway:app", "--app-dir", "src", "--host", "127.0.0.1", "--port", "8000") -WorkingDirectory $RootDir -RedirectStandardOutput (Join-Path $logs "backend-local.stdout.log") -RedirectStandardError (Join-Path $logs "backend-local.stderr.log") -WindowStyle Hidden
             Push-Location (Join-Path $RootDir "control-panel")
             try {
