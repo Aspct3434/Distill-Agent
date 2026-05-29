@@ -496,7 +496,7 @@ MAX_REACT_ITERATIONS = int(os.getenv("AGENT_MAX_REACT_ITERATIONS", "16"))
 # loop does not stop one step short of done and force the user to type
 # "continue". Simple/informational tasks keep the smaller, cheaper cap.
 _ACTION_MAX_REACT_ITERATIONS = max(
-    MAX_REACT_ITERATIONS, int(os.getenv("AGENT_ACTION_MAX_REACT_ITERATIONS", "30"))
+    MAX_REACT_ITERATIONS, int(os.getenv("AGENT_ACTION_MAX_REACT_ITERATIONS", "18"))
 )
 
 # Background auto-continuation: when a batch of iterations hits its cap but the
@@ -510,17 +510,19 @@ _AUTO_CONTINUE_ENABLED = os.getenv("AGENT_AUTO_CONTINUE", "true").lower() in {
     "yes",
     "on",
 }
-_MAX_AUTO_CONTINUE_BATCHES = max(1, int(os.getenv("AGENT_MAX_AUTO_CONTINUE_BATCHES", "3")))
+_MAX_AUTO_CONTINUE_BATCHES = max(1, int(os.getenv("AGENT_MAX_AUTO_CONTINUE_BATCHES", "2")))
 
 # Escalate the main loop from the fast model to the strong model after this many
 # consecutive iterations whose every tool call errored (only when the tiers differ).
 _ESCALATE_AFTER_CONSECUTIVE_ERROR_ITERS = 2
 
-_LLM_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "32768"))
+_LLM_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "4096"))
+_LLM_PLANNING_MAX_TOKENS = int(os.getenv("AGENT_PLANNING_MAX_TOKENS", "2048"))
+_LLM_ARTIFACT_MAX_TOKENS = int(os.getenv("AGENT_ARTIFACT_MAX_TOKENS", "20000"))
 
 # Larger budget for the final synthesised answer (e.g. the progress summary on a
 # cap hit), which is prose rather than tool-call arguments and can need more room.
-_LLM_FINAL_MAX_TOKENS = int(os.getenv("AGENT_FINAL_MAX_TOKENS", "8192"))
+_LLM_FINAL_MAX_TOKENS = int(os.getenv("AGENT_FINAL_MAX_TOKENS", "4096"))
 
 # Persist a checkpoint on the first iteration and then every Nth, instead of on
 # every iteration, to cut redundant full-history writes.
@@ -609,6 +611,84 @@ _SELF_REPAIR_TOOLS: frozenset[str] = frozenset(
         "wait_for_port",
     }
 )
+
+_LOW_OUTPUT_TOOL_CALL_TOOLS: frozenset[str] = frozenset(
+    {
+        TASK_CONTRACT_TOOL,
+        "update_plan",
+        SET_TASK_GRAPH_TOOL_NAME,
+        INSPECT_TASK_GRAPH_TOOL_NAME,
+        UPDATE_TASK_NODE_TOOL_NAME,
+        REPAIR_TASK_GRAPH_TOOL_NAME,
+        VERIFY_TASK_GRAPH_TOOL_NAME,
+        "get_system_environment",
+        "get_filesystem_process_evidence",
+        "wait_for_port",
+        "expose_local_http_service",
+        "execute_terminal_command",
+        "execute_background_service",
+        "web_search",
+        "web_fetch",
+        "browser_navigate",
+        "browser_get_text",
+        "browser_screenshot",
+        "browser_click",
+        "browser_fill",
+        "browser_evaluate",
+        "create_directory",
+        "move_file",
+        "copy_file",
+        "delete_file",
+        "create_table",
+        "write_query",
+        "read_query",
+        "describe_table",
+        "list_tables",
+        "list_scheduled_tasks",
+        "list_skills",
+        "expand_tool_output",
+    }
+)
+
+_HIGH_OUTPUT_TOOL_CALL_TOOLS: frozenset[str] = frozenset(
+    {
+        "write_text_file",
+        "generate_image",
+        "delegate_task",
+    }
+)
+
+
+def _tool_names_from_schemas(tool_schemas: list[dict[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for schema in tool_schemas:
+        name = schema.get("function", {}).get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
+def _max_tokens_for_request(
+    *,
+    must_set_contract: bool,
+    requires_tool_call: bool,
+    request_tool_schemas: list[dict[str, Any]],
+) -> int:
+    """Choose a tight output cap for the kind of turn being requested.
+
+    The previous blanket 32k cap was useful for one-shot artifact writes, but it
+    also applied to contract, planning, verification, and final-answer turns.
+    Those low-output calls make up most ReAct iterations, so keeping them small
+    reduces provider token reservations without limiting full-file writes.
+    """
+    if not requires_tool_call:
+        return _LLM_FINAL_MAX_TOKENS
+    tool_names = _tool_names_from_schemas(request_tool_schemas)
+    if must_set_contract or (tool_names and tool_names <= _LOW_OUTPUT_TOOL_CALL_TOOLS):
+        return _LLM_PLANNING_MAX_TOKENS
+    if tool_names & _HIGH_OUTPUT_TOOL_CALL_TOOLS:
+        return _LLM_ARTIFACT_MAX_TOKENS
+    return _LLM_MAX_TOKENS
 
 SYSTEM_DIRECTIVE = (
     "You are an autonomous engineering framework for user-requested tasks. "
@@ -1753,6 +1833,11 @@ class AgentEngine:
                     completion_kwargs["tool_choice"] = "required"
                 else:
                     completion_kwargs.pop("tool_choice", None)
+                completion_kwargs["max_tokens"] = _max_tokens_for_request(
+                    must_set_contract=must_set_contract,
+                    requires_tool_call=requires_tool_call,
+                    request_tool_schemas=request_tool_schemas,
+                )
 
                 # Disable parallel tool calls during contract-enforced iterations.
                 # When the contract gate narrows tools to a single option (e.g.

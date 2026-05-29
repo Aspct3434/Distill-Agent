@@ -201,6 +201,7 @@ class _ScriptedStreamingModel:
         self.request_tool_names: list[list[str]] = []
         self.request_tool_choices: list[Any] = []
         self.request_parallel_tool_calls: list[Any] = []
+        self.request_max_tokens: list[int | None] = []
 
     async def __call__(self, **kwargs: Any) -> Any:
         messages = kwargs["messages"]
@@ -214,6 +215,7 @@ class _ScriptedStreamingModel:
         )
         self.request_tool_choices.append(kwargs.get("tool_choice"))
         self.request_parallel_tool_calls.append(kwargs.get("parallel_tool_calls"))
+        self.request_max_tokens.append(kwargs.get("max_tokens"))
         response = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return _stream_response(response)
@@ -362,6 +364,38 @@ def test_execute_contract_suppresses_rejected_streamed_prose() -> None:
     )
     assert any("mkdir -p /tmp/sleep-website" in command for command in tools.commands)
     assert tools.served and tools.served[-1]["connectable"] is True
+
+
+def test_react_loop_uses_tight_token_caps_until_artifact_write() -> None:
+    script = [
+        _completion(tool_calls=[_contract_tool("execute", ["filesystem_artifact"])]),
+        _completion(tool_calls=[_plan_tool("in_progress")]),
+        _completion(
+            tool_calls=[
+                _tool_call(
+                    "call_write",
+                    "write_text_file",
+                    {
+                        "path": "/tmp/sleep-website/index.html",
+                        "content": "<!doctype html><title>Sleep</title>",
+                    },
+                )
+            ]
+        ),
+        _completion(tool_calls=[_plan_tool("done")]),
+        _completion(content="Created /tmp/sleep-website/index.html"),
+    ]
+
+    events, _, model = asyncio.run(_run_engine_with_model(script))
+
+    assert any(event.get("type") == "text" for event in events)
+    assert model.request_max_tokens[:5] == [
+        agent_module._LLM_PLANNING_MAX_TOKENS,
+        agent_module._LLM_PLANNING_MAX_TOKENS,
+        agent_module._LLM_ARTIFACT_MAX_TOKENS,
+        agent_module._LLM_PLANNING_MAX_TOKENS,
+        agent_module._LLM_FINAL_MAX_TOKENS,
+    ]
 
 
 def test_missing_evidence_allows_matching_generated_skill() -> None:

@@ -73,8 +73,52 @@ export interface ToolBadgeProps {
   params: Record<string, unknown>;
 }
 
+function compact(text: string, limit = 180): string {
+  const value = text.replace(/\s+/g, " ").trim();
+  return value.length <= limit ? value : `${value.slice(0, limit - 3).trim()}...`;
+}
+
+function paramText(params: Record<string, unknown>, key: string): string {
+  const value = params[key];
+  return typeof value === "string" ? value : "";
+}
+
+function formatToolSummary(toolName: string, params: Record<string, unknown>): string {
+  if (toolName === "execute_terminal_command") {
+    return `Running: ${compact(paramText(params, "command"), 260)}`;
+  }
+  if (toolName === "execute_background_service") {
+    return `Starting service: ${compact(paramText(params, "command"), 260)}`;
+  }
+  if (toolName === "write_text_file" || toolName === "write_file") {
+    return `Writing ${paramText(params, "path") || paramText(params, "file_path") || "file"}`;
+  }
+  if (toolName === "edit_file") {
+    return `Editing ${paramText(params, "path") || paramText(params, "file_path") || "file"}`;
+  }
+  if (toolName === "web_search") {
+    return `Searching: ${compact(paramText(params, "query"), 160)}`;
+  }
+  if (toolName === "web_fetch") {
+    return `Fetching ${compact(paramText(params, "url"), 200)}`;
+  }
+  if (toolName === "wait_for_port") {
+    return `Waiting for port ${String(params.port ?? "?")}`;
+  }
+  if (toolName === "expose_local_http_service") {
+    return `Exposing port ${String(params.port ?? "?")}`;
+  }
+  if (toolName.startsWith("browser_")) {
+    const action = toolName.slice("browser_".length).replaceAll("_", " ");
+    const target = paramText(params, "url") || paramText(params, "selector");
+    return target ? `Browser ${action}: ${compact(target, 120)}` : `Browser ${action}`;
+  }
+  return toolName.replaceAll("_", " ");
+}
+
 export function ToolBadge({ toolName, params }: ToolBadgeProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
+  const summary = formatToolSummary(toolName, params);
 
   return (
     <div className="w-full overflow-hidden rounded-lg border border-zinc-700 font-mono shadow-lg">
@@ -86,7 +130,10 @@ export function ToolBadge({ toolName, params }: ToolBadgeProps) {
         aria-expanded={open}
       >
         <Wrench size={14} className="shrink-0 text-zinc-400" />
-        <span className="flex-1 truncate text-xs font-semibold tracking-wide text-zinc-200">
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-zinc-200">
+          {summary}
+        </span>
+        <span className="hidden shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-500 sm:inline">
           {toolName}
         </span>
         <ChevronDown

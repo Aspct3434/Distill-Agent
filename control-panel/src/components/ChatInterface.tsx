@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { AlertTriangle, CheckCircle2, MessageSquare, Plus, Send, Square, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  Info,
+  MessageSquare,
+  Plus,
+  Send,
+  Square,
+  Trash2,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAgentStream, type AgentEvent } from "./useAgentStream";
@@ -139,6 +149,43 @@ function StreamingTextBubble({ text }: { text: string }) {
   );
 }
 
+function firstLine(text: string, limit = 180): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length <= limit ? compact : `${compact.slice(0, limit - 3).trim()}...`;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeToolResult(toolName: string, isError: boolean, content: string): string {
+  if (isError) return firstLine(content || "Tool failed");
+  const payload = parseJsonObject(content);
+  if (payload) {
+    if (payload.written && payload.exists && typeof payload.path === "string") {
+      return `Wrote ${payload.path}`;
+    }
+    if (payload.exposed && typeof payload.url === "string") {
+      return `Exposed ${payload.url}`;
+    }
+    if (payload.status === "launched" && payload.pid) {
+      return `Started process ${payload.pid}`;
+    }
+    if (typeof payload.exit_code === "number") {
+      return `Command exited ${payload.exit_code}`;
+    }
+    if (payload.status) return `Completed with status ${String(payload.status)}`;
+  }
+  return `${toolName} completed`;
+}
+
 function ToolResultBubble({
   toolName,
   isError,
@@ -148,23 +195,54 @@ function ToolResultBubble({
   isError: boolean;
   content: string;
 }) {
+  const [open, setOpen] = useState(isError);
   const Icon = isError ? AlertTriangle : CheckCircle2;
   const tone = isError
     ? "border-red-500/40 bg-red-950/30 text-red-100"
     : "border-emerald-500/30 bg-emerald-950/20 text-emerald-100";
+  const summary = summarizeToolResult(toolName, isError, content);
   return (
     <div className="flex justify-start">
       <div className={`max-w-[86%] overflow-hidden rounded-lg border ${tone}`}>
-        <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 text-xs font-semibold">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex w-full items-center gap-2 border-b border-white/10 px-3 py-2 text-left text-xs font-semibold"
+          aria-expanded={open}
+        >
           <Icon size={14} className="shrink-0" />
-          <span className="truncate">{toolName}</span>
+          <span className="min-w-0 flex-1 truncate">{summary}</span>
           <span className="ml-auto shrink-0 font-mono text-[11px] uppercase opacity-70">
             {isError ? "error" : "result"}
           </span>
-        </div>
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed">
-          {content}
-        </pre>
+          <ChevronDown
+            size={14}
+            className={`shrink-0 transition-transform duration-200 ${
+              open ? "rotate-180" : "rotate-0"
+            }`}
+          />
+        </button>
+        {open && (
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed">
+            {content}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatusBubble({ message, tone = "info" }: { message: string; tone?: "info" | "error" }) {
+  const isError = tone === "error";
+  const Icon = isError ? AlertTriangle : Info;
+  const classes = isError
+    ? "border-red-500/40 bg-red-950/30 text-red-100"
+    : "border-sky-500/30 bg-sky-950/20 text-sky-100";
+  return (
+    <div className="flex justify-start">
+      <div className={`flex max-w-[86%] items-center gap-2 rounded-lg border px-3 py-2 text-xs ${classes}`}>
+        <Icon size={14} className="shrink-0" />
+        <span className="min-w-0 whitespace-pre-wrap break-words">{message}</span>
       </div>
     </div>
   );
@@ -187,6 +265,12 @@ function ThinkingIndicator() {
 }
 
 function EventRow({ event }: { event: AgentEvent }) {
+  if (event.type === "status") {
+    return <StatusBubble message={event.message} />;
+  }
+  if (event.type === "error") {
+    return <StatusBubble message={event.detail} tone="error" />;
+  }
   if (event.type === "tool_call") {
     return <ToolBadge toolName={event.tool} params={event.params} />;
   }

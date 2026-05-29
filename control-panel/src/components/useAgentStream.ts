@@ -20,6 +20,16 @@ export type ToolResultEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type StatusEvent = {
+  type: "status";
+  message: string;
+};
+
+export type ErrorEvent = {
+  type: "error";
+  detail: string;
+};
+
 export type FinalAnswerEvent = {
   type: "final_answer";
   /** "iteration_limit" - hit MAX_REACT_ITERATIONS; "exception" - unhandled Python error */
@@ -37,7 +47,13 @@ export type TokenEvent = {
   content: string;
 };
 
-export type AgentEvent = ToolCallEvent | ToolResultEvent | TextEvent | FinalAnswerEvent;
+export type AgentEvent =
+  | ToolCallEvent
+  | ToolResultEvent
+  | TextEvent
+  | FinalAnswerEvent
+  | StatusEvent
+  | ErrorEvent;
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
@@ -105,10 +121,16 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
           parsed.type === "tool_call" ||
           parsed.type === "tool_result" ||
           parsed.type === "text" ||
-          parsed.type === "final_answer"
+          parsed.type === "final_answer" ||
+          parsed.type === "status" ||
+          parsed.type === "error"
         ) {
           if (parsed.type === "text" || parsed.type === "final_answer") {
             setStreamingText("");
+          }
+          if (parsed.type === "status") {
+            const message = String((parsed as StatusEvent).message || "").trim();
+            if (!message || message === "Thinking...") return;
           }
           setEvents((previous) => [...previous, parsed as AgentEvent]);
         }

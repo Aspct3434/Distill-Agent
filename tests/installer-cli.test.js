@@ -64,6 +64,8 @@ function assertIncludes(text, expected) {
   assertIncludes(result.stdout, "Security Notice");
   assertIncludes(result.stdout, "[dry-run] git clone --branch master https://github.com/Aspct3434/agent-ai.git");
   assertIncludes(result.stdout, 'AGENT_MODEL="gpt-4o"');
+  assertIncludes(result.stdout, 'AGENT_MAX_TOKENS="4096"');
+  assertIncludes(result.stdout, 'AGENT_ARTIFACT_MAX_TOKENS="20000"');
   assertIncludes(result.stdout, 'AGENT_SANDBOX_HOST_FALLBACK="false"');
   assertIncludes(result.stdout, "Start later with: npx @aspct3434/distill-agent start");
   assertIncludes(result.stdout, "Installation Summary");
@@ -170,6 +172,16 @@ function assertIncludes(text, expected) {
 
   assert.strictEqual(__testing.pythonHasVenv(process.execPath, [workingPython]), true);
   assert.strictEqual(__testing.pythonHasVenv(process.execPath, [brokenPython]), false);
+}
+
+{
+  const { __testing } = require(path.join(root, "lib", "distill-cli.js"));
+  assert.strictEqual(__testing.nodeMeetsHostLocalUiMinimum("v18.19.1"), false);
+  assert.strictEqual(__testing.nodeMeetsHostLocalUiMinimum("v20.18.0"), false);
+  assert.strictEqual(__testing.nodeMeetsHostLocalUiMinimum("v20.19.0"), true);
+  assert.strictEqual(__testing.nodeMeetsHostLocalUiMinimum("v22.11.0"), false);
+  assert.strictEqual(__testing.nodeMeetsHostLocalUiMinimum("v22.12.0"), true);
+  assert.strictEqual(__testing.nodeMeetsHostLocalUiMinimum("v24.0.0"), true);
 }
 
 // Secret prompts echo one "*" per character on an interactive terminal so the
