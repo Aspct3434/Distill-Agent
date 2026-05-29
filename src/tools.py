@@ -262,6 +262,36 @@ _DANGEROUS_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bshred\b.{0,40}/dev/nvme\d", re.IGNORECASE),
     # chmod 777 on system directories
     re.compile(r"\bchmod\s+777\s+/(etc|bin|sbin|lib|usr)\b", re.IGNORECASE),
+    # -----------------------------------------------------------------------
+    # Enhanced patterns: bypass-resistant additions
+    # -----------------------------------------------------------------------
+    # Base64-encoded payload execution (e.g. echo <b64> | base64 -d | bash)
+    re.compile(
+        r"\bbase64\s+(-d|--decode)\b.{0,40}\|\s*(bash|sh|zsh|dash|python|perl|ruby)\b",
+        re.IGNORECASE,
+    ),
+    # Reverse shells via /dev/tcp or /dev/udp
+    re.compile(r"/dev/(tcp|udp)/", re.IGNORECASE),
+    # Reverse shells via netcat variants (nc/ncat/netcat -e)
+    re.compile(
+        r"\b(nc|ncat|netcat)\b.{0,60}(-e\s+|--exec\s+)(/?bin/)?(bash|sh|zsh)\b",
+        re.IGNORECASE,
+    ),
+    # curl/wget piped directly to a shell interpreter
+    re.compile(
+        r"\b(curl|wget)\b.{0,120}\|\s*(sudo\s+)?(bash|sh|zsh|dash|python|perl|ruby)\b",
+        re.IGNORECASE,
+    ),
+    # Python one-liner reverse shells (socket + subprocess/pty/os.system)
+    re.compile(
+        r"\bpython[23]?\b.{0,40}import\s+socket.{0,120}(subprocess|pty\.spawn|os\.system)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    # eval/exec of fetched or decoded content (common code-injection pattern)
+    re.compile(
+        r"\b(curl|wget)\b.{0,80}\$\(.{0,40}\b(eval|exec)\b",
+        re.IGNORECASE,
+    ),
 )
 
 # Matches the target of any `cd` call in a shell command string.
