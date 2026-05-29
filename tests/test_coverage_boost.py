@@ -18,6 +18,7 @@ from agent import (
     AgentEngine,
     _filesystem_process_evidence_has_negative_findings,
     _should_emit_tool_call_progress,
+    _summarize_host_environment,
 )
 from contract import (
     MAX_CONSECUTIVE_VERIFICATION_CALLS,
@@ -749,6 +750,57 @@ class TestCanStreamTextBeforeFinal:
 # ===========================================================================
 # planning.py — pruning and compaction
 # ===========================================================================
+
+class TestHostEnvironmentSummary:
+    def test_host_mode_is_explicitly_not_sandboxed(self):
+        raw = json.dumps(
+            {
+                "os": "Linux",
+                "shell": {"shell": "bash", "posix": True},
+                "runtimes": {"python3": True, "docker": False},
+                "user": {"is_root": False, "sudo_available": True},
+            }
+        )
+
+        summary = _summarize_host_environment(raw)
+
+        assert "Sandbox: off" in summary
+        assert "Docker sandbox" not in summary
+        assert "Linux container" not in summary
+
+    def test_docker_wording_requires_sandbox_payload(self):
+        raw = json.dumps(
+            {
+                "os": "Linux",
+                "shell": {"shell": "bash", "posix": True},
+                "runtimes": {"python3": True},
+                "user": {"is_root": True, "sudo_available": False},
+                "sandbox": {"mode": "docker", "image": "python", "container_workdir": "/workspace"},
+            }
+        )
+
+        summary = _summarize_host_environment(raw)
+
+        assert "Sandbox: docker" in summary
+        assert "active Docker sandbox" in summary
+
+    def test_non_docker_sandbox_uses_generic_wording(self):
+        raw = json.dumps(
+            {
+                "os": "Linux",
+                "shell": {"shell": "bash", "posix": True},
+                "runtimes": {"python3": True},
+                "user": {"is_root": False, "sudo_available": True},
+                "sandbox": {"mode": "remote", "workdir": "/workspace"},
+            }
+        )
+
+        summary = _summarize_host_environment(raw)
+
+        assert "Sandbox: remote" in summary
+        assert "active remote sandbox" in summary
+        assert "Docker sandbox" not in summary
+
 
 class TestPruneMessageWindow:
     def _make_messages(self, n: int) -> list[dict]:

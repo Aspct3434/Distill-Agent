@@ -37,6 +37,44 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _http_body_looks_like_directory_listing(body: str) -> bool:
+    lower = body[:2000].lower()
+    return (
+        "<title>directory listing for" in lower
+        or "<h1>directory listing for" in lower
+        or "directory listing for /" in lower
+    )
+
+
+def _parse_http_status_and_body(raw: bytes) -> tuple[int | None, str]:
+    text = raw.decode("utf-8", errors="replace")
+    head, _, body = text.partition("\r\n\r\n")
+    first = head.splitlines()[0] if head else ""
+    match = re.match(r"HTTP/\d(?:\.\d)?\s+(\d{3})\b", first)
+    return (int(match.group(1)) if match else None, body)
+
+
+def _fetch_local_http_preview(port: int, path: str) -> tuple[int | None, str]:
+    request_path = "/" + path.lstrip("/")
+    with socket.create_connection(("127.0.0.1", int(port)), timeout=2.0) as sock:
+        sock.sendall(
+            (
+                f"GET {request_path} HTTP/1.0\r\n"
+                "Host: 127.0.0.1\r\n"
+                "Connection: close\r\n\r\n"
+            ).encode("ascii")
+        )
+        chunks: list[bytes] = []
+        remaining = 8192
+        while remaining > 0:
+            chunk = sock.recv(min(remaining, 2048))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    return _parse_http_status_and_body(b"".join(chunks))
+
+
 def _auto_sign_proxy_url(url: str) -> str:
     """If *url* targets our own gateway's /proxy/<port>/ path without auth
     tokens, append a fresh signed token so the request is not rejected with
@@ -1358,11 +1396,11 @@ EXPOSE_LOCAL_HTTP_SERVICE_TOOL: dict[str, Any] = {
     "server": "__builtin__",
     "name": "expose_local_http_service",
     "description": (
-        "Return a browser-reachable URL for an HTTP service already running inside "
-        "the agent container. The backend proxies /proxy/<port>/... through the "
-        "existing localhost:8000 Docker mapping, so no manual docker-compose port "
-        "editing is needed. Use after starting dev servers, APIs, dashboards, local "
-        "UIs, or any other HTTP service with execute_background_service."
+        "Return a browser-reachable URL for an HTTP service already running in the "
+        "active execution environment. The backend proxies /proxy/<port>/... through "
+        "the existing local gateway, so no manual network or compose-file editing is "
+        "needed. Use after starting dev servers, APIs, dashboards, local UIs, or any "
+        "other HTTP service with execute_background_service."
     ),
     "inputSchema": {
         "type": "object",
@@ -1372,7 +1410,7 @@ EXPOSE_LOCAL_HTTP_SERVICE_TOOL: dict[str, Any] = {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 65535,
-                "description": "The internal container TCP port the HTTP service is listening on.",
+                "description": "The TCP port the HTTP service is listening on.",
             },
             "path": {
                 "type": "string",
@@ -2650,6 +2688,34 @@ class ToolManager:
             )
 
         clean_path = path.strip().lstrip("/")
+        http_status: int | None = None
+        directory_listing = False
+        try:
+            if self._sandbox is not None:
+                preview = self._sandbox.fetch_http_json(
+                    port=service_port,
+                    path=clean_path,
+                    query="",
+                    method="GET",
+                    headers={},
+                    body_b64="",
+                )
+                http_status = int(preview.get("status_code") or 0) or None
+                body = base64.b64decode(preview.get("body_b64") or "").decode(
+                    "utf-8", errors="replace"
+                )
+            else:
+                http_status, body = _fetch_local_http_preview(service_port, clean_path)
+            directory_listing = _http_body_looks_like_directory_listing(body)
+        except Exception as exc:
+            logger.debug("HTTP preview check failed for port %s: %s", service_port, exc)
+        if directory_listing:
+            target = f"/{clean_path}" if clean_path else "/"
+            raise ConnectionError(
+                f"HTTP service on 127.0.0.1:{service_port}{target} is a directory "
+                "listing, not a ready static site. Serve a directory containing "
+                "index.html or expose the exact HTML file path."
+            )
         suffix = f"/{clean_path}" if clean_path else "/"
         payload = {
             "exposed": True,
@@ -2662,6 +2728,8 @@ class ToolManager:
             ),
             "connectable": connectable,
             "scope": scope,
+            "http_status": http_status,
+            "directory_listing": directory_listing,
         }
         return json.dumps(payload, indent=2)
 

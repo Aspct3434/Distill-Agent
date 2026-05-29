@@ -16,8 +16,10 @@ from tools import (
     ToolManager,
     _detect_posix_shell,
     _DockerSandbox,
+    _http_body_looks_like_directory_listing,
     _is_dangerous_command,
     _normalize_sudo_noninteractive,
+    _parse_http_status_and_body,
     _sudo_password_input_reason,
     _wrong_environment_command_reason,
 )
@@ -251,3 +253,19 @@ def test_write_text_file_reports_sandbox_path(tmp_path):
     assert result["path"] == "/workspace/generated_sites/site/index.html"
     assert "C:" not in result["path"]
     assert (tmp_path / "generated_sites" / "site" / "index.html").is_file()
+
+
+def test_directory_listing_preview_is_detected():
+    body = "<html><head><title>Directory listing for /</title></head><body></body></html>"
+
+    assert _http_body_looks_like_directory_listing(body)
+    assert not _http_body_looks_like_directory_listing("<!doctype html><title>Portfolio</title>")
+
+
+def test_http_preview_parser_extracts_status_and_body():
+    status, body = _parse_http_status_and_body(
+        b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n<!doctype html>"
+    )
+
+    assert status == 200
+    assert body == "<!doctype html>"

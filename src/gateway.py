@@ -1221,7 +1221,7 @@ async def proxy_local_http_service(
     request: Request,
     path: str = "",
 ) -> Response:
-    """Proxy browser traffic to HTTP services running inside the agent container."""
+    """Proxy browser traffic to HTTP services in the active execution environment."""
     if port < 1 or port > 65535:
         raise HTTPException(status_code=400, detail="Port must be between 1 and 65535")
 
@@ -1533,6 +1533,24 @@ async def get_user_profile() -> dict[str, Any]:
 async def clear_user_profile() -> dict[str, str]:
     app.state.profile_store.clear()
     return {"status": "cleared"}
+
+
+class ProfilePendingRequest(BaseModel):
+    update_id: str | None = None
+
+
+@app.post("/api/profile/pending/approve")
+async def approve_pending_profile(payload: ProfilePendingRequest) -> dict[str, Any]:
+    profile_store: UserProfileStore = app.state.profile_store
+    approved = profile_store.approve_pending(payload.update_id)
+    return {"status": "ok", "approved": approved, "profile": profile_store.get()}
+
+
+@app.post("/api/profile/pending/reject")
+async def reject_pending_profile(payload: ProfilePendingRequest) -> dict[str, Any]:
+    profile_store: UserProfileStore = app.state.profile_store
+    rejected = profile_store.reject_pending(payload.update_id)
+    return {"status": "ok", "rejected": rejected, "profile": profile_store.get()}
 
 
 # ---------------------------------------------------------------------------

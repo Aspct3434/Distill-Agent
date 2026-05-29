@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -229,6 +230,194 @@ def _successful_evidence_items(
     return items
 
 
+def _compact_evidence_items(
+    items: list[tuple[str, str]],
+    original_prompt: str,
+) -> list[tuple[str, str]]:
+    """Keep user-facing proof short while preserving full evidence in history."""
+    wants_command_output = any(
+        token in original_prompt.lower()
+        for token in ("output", "result", "stdout", "stderr", "command")
+    )
+    priority = {
+        "Service URL": 0,
+        "File": 1,
+        "Path": 2,
+        "Port": 3,
+        "Process": 4,
+        "Log": 5,
+        "Command output": 6 if wants_command_output else 99,
+        "Command": 7 if wants_command_output else 99,
+    }
+    compacted: list[tuple[str, str]] = []
+    for label, value in sorted(items, key=lambda item: priority.get(item[0], 50)):
+        if priority.get(label, 50) >= 99:
+            continue
+        if (label, value) not in compacted:
+            compacted.append((label, value))
+        if len(compacted) >= 6:
+            break
+    return compacted
+
+
+_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def _normalized_user_text(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def _is_simple_environment_request(text: str) -> bool:
+    normalized = _normalized_user_text(text).strip(" ?!.")
+    if not normalized:
+        return False
+    if re.search(r"\b(env\s*var|environment variables?|dotenv)\b", normalized) or ".env" in normalized:
+        return False
+
+    tokens = set(re.findall(r"[a-z0-9]+", normalized))
+    if tokens & {"ip", "ipv4", "ipv6", "public", "url", "port", "website", "serve"}:
+        return False
+    environment_subject = bool(
+        tokens
+        & {
+            "environment",
+            "runtime",
+            "runtimes",
+            "machine",
+            "system",
+            "platform",
+            "host",
+            "os",
+        }
+    )
+    runtime_context = bool(
+        tokens
+        & {
+            "info",
+            "status",
+            "report",
+            "details",
+            "available",
+            "installed",
+            "execution",
+            "shell",
+            "tools",
+            "runtimes",
+        }
+    )
+    request_intent = bool(
+        tokens
+        & {
+            "check",
+            "show",
+            "inspect",
+            "report",
+            "list",
+            "describe",
+            "summarize",
+            "status",
+            "what",
+            "which",
+        }
+    ) or normalized.startswith(("tell me", "give me"))
+    bare_subject = tokens <= {
+        "environment",
+        "runtime",
+        "runtimes",
+        "machine",
+        "system",
+        "platform",
+        "host",
+        "os",
+        "info",
+        "status",
+        "report",
+        "execution",
+    }
+    return environment_subject and (request_intent or runtime_context or bare_subject)
+
+
+def _is_public_ipv4_request(text: str) -> bool:
+    normalized = _normalized_user_text(text)
+    return (
+        "public" in normalized
+        and ("ipv4" in normalized or "ip address" in normalized or normalized.endswith(" ip"))
+        and not any(token in normalized for token in ("host on", "serve on", "website"))
+    )
+
+
+def _is_current_cwd_request(text: str) -> bool:
+    normalized = _normalized_user_text(text).strip(" ?!.")
+    return normalized in {
+        "pwd",
+        "cwd",
+        "current directory",
+        "current working directory",
+        "where am i",
+        "what directory are you in",
+    }
+
+
+def _extract_simple_port_status_request(text: str) -> int | None:
+    normalized = _normalized_user_text(text)
+    match = re.search(r"\bport\s+(\d{1,5})\b", normalized)
+    if not match:
+        return None
+    if not any(
+        phrase in normalized
+        for phrase in (
+            "check port",
+            "port status",
+            "is port",
+            "what is on port",
+            "anything running on port",
+            "listening on port",
+            "open on port",
+        )
+    ):
+        return None
+    port = int(match.group(1))
+    return port if 1 <= port <= 65535 else None
+
+
+def _is_last_url_request(text: str) -> bool:
+    normalized = _normalized_user_text(text)
+    return (
+        any(token in normalized for token in ("url", "link"))
+        and any(token in normalized for token in ("give", "send", "show", "last", "again", "where"))
+    )
+
+
+def _latest_service_url_from_history(
+    messages: list[dict[str, Any]],
+) -> str | None:
+    for label, value in reversed(_successful_evidence_items([], messages)):
+        if label == "Service URL":
+            return value
+    return None
+
+
+def _profile_update_signal(text: str) -> bool:
+    normalized = _normalized_user_text(text)
+    return any(
+        phrase in normalized
+        for phrase in (
+            "remember",
+            "i prefer",
+            "i like",
+            "i don't",
+            "i dont",
+            "don't call",
+            "dont call",
+            "call me",
+            "my name is",
+            "persona",
+            "profile",
+            "adapt to",
+        )
+    )
+
+
 def _should_include_evidence_summary(
     contract: dict[str, Any] | None,
     original_prompt: str,
@@ -275,6 +464,7 @@ def _ensure_evidence_in_final_response(
         for label, value in _successful_evidence_items(steps, messages)
         if value not in final_response
     ]
+    missing_items = _compact_evidence_items(missing_items, original_prompt)
     if not missing_items:
         return final_response
 
@@ -516,13 +706,13 @@ _MAX_AUTO_CONTINUE_BATCHES = max(1, int(os.getenv("AGENT_MAX_AUTO_CONTINUE_BATCH
 # consecutive iterations whose every tool call errored (only when the tiers differ).
 _ESCALATE_AFTER_CONSECUTIVE_ERROR_ITERS = 2
 
-_LLM_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "4096"))
-_LLM_PLANNING_MAX_TOKENS = int(os.getenv("AGENT_PLANNING_MAX_TOKENS", "2048"))
+_LLM_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
+_LLM_PLANNING_MAX_TOKENS = int(os.getenv("AGENT_PLANNING_MAX_TOKENS", "1024"))
 _LLM_ARTIFACT_MAX_TOKENS = int(os.getenv("AGENT_ARTIFACT_MAX_TOKENS", "20000"))
 
 # Larger budget for the final synthesised answer (e.g. the progress summary on a
 # cap hit), which is prose rather than tool-call arguments and can need more room.
-_LLM_FINAL_MAX_TOKENS = int(os.getenv("AGENT_FINAL_MAX_TOKENS", "4096"))
+_LLM_FINAL_MAX_TOKENS = int(os.getenv("AGENT_FINAL_MAX_TOKENS", "1536"))
 
 # Persist a checkpoint on the first iteration and then every Nth, instead of on
 # every iteration, to cut redundant full-history writes.
@@ -814,8 +1004,8 @@ SYSTEM_DIRECTIVE = (
     "<style> CSS and vanilla <script> JavaScript. Vanilla JS is fully interactive "
     "(buttons, tabs, toggles, accordions, quizzes, counters, sliders, canvas "
     "animations, charts) and needs NO build step, NO Node.js, and NO npm, so it works "
-    "in every environment and servees immediately. Write it with write_text_file, "
-    "then serve it from the Docker workspace with a simple HTTP server, wait for "
+    "in every environment and serves immediately. Write it with write_text_file, "
+    "then serve it from the active workspace with a simple HTTP server, wait for "
     "the port, expose that port, then verify -- no scaffold, no install. Reach for React, Vue, Svelte, Vite, or Next -- or any npm-based "
     "build -- ONLY when the user EXPLICITLY names that framework; in that case first "
     "confirm node/npm exist via get_system_environment, then follow the build recipe "
@@ -835,13 +1025,17 @@ SYSTEM_DIRECTIVE = (
     "If the file is getting large, that is FINE â€” write the complete content in a "
     "single write_text_file call. The tool supports large content payloads. "
     "If the user asks to host, serve, serve, or get a browser URL for a static "
-    "website, start a normal HTTP server in the Docker workspace with "
+    "website, start a normal HTTP server in the active workspace with "
     "execute_background_service (for example python -m http.server from the site "
-    "directory), wait_for_port, then expose_local_http_service. The public URL "
-    "must use the backend's generic /proxy/<port>/ path. A website deliverable "
+    "directory), wait_for_port, then expose_local_http_service. The browser URL "
+    "must use the backend's generic /proxy/<port>/ path unless a real public "
+    "deployment target is configured. A website deliverable "
     "is not complete when files merely exist: after creating or editing the site, "
-    "serve it, verify it, and include the working localhost proxy URL in the final "
+    "serve it, verify it, and include the working proxy URL in the final "
     "answer. The user must not need to ask separately for hosting or port setup. "
+    "For static sites, serve a directory that contains index.html at its root; "
+    "if you expose a specific HTML file, return that exact file URL. Never claim "
+    "a site is ready when the root URL is a directory listing. "
     # â”€â”€ React / Vite / SPA build-and-serve recipe (only when requested) â”€â”€â”€â”€â”€
     "When the user EXPLICITLY asked for React/Vue/Svelte/Vite/Next (otherwise use "
     "the vanilla single-file approach above): such a single-page app is NOT a static "
@@ -869,15 +1063,20 @@ SYSTEM_DIRECTIVE = (
     "verified -- and do not waste turns re-writing the same source file you already "
     "wrote; check Completed_Actions first. "
     "If you start any HTTP app, API, dashboard, notebook, frontend dev server, or "
-    "browser UI on an internal container port, call expose_local_http_service after "
+    "browser UI on an active-environment port, call expose_local_http_service after "
     "the service is listening and give the returned /proxy URL. Do not ask the user "
-    "to manually open ports or edit Docker Compose for normal HTTP access. "
+    "to manually open ports for normal proxied HTTP access. "
+    "Do not confuse a proxy URL, a public IPv4 address, and direct inbound port "
+    "reachability: a public IPv4 only identifies the outbound network address; "
+    "it does not prove that http://<public-ip>:<port>/ is reachable from the "
+    "internet. Only claim external reachability after a proxy response or an "
+    "explicit external network check proves it. "
     # ── Scheduled tasks vs background services ────────────────────────────
     "For time-based recurring work (heartbeats, periodic reports, cleanup), use "
     "schedule_task — it registers a persistent cron/interval/once job with the "
     "agent scheduler, survives restarts, and is visible via list_scheduled_tasks. "
     "execute_background_service is only for non-terminating daemons and servers "
-    "that must run continuously inside the current container session. Never use "
+    "that must run continuously inside the active execution session. Never use "
     "execute_background_service for work that should repeat on a schedule. "
     "After calling schedule_task, always call list_scheduled_tasks to confirm the "
     "job was registered and show the user its job_id and next-run time. "
@@ -1192,10 +1391,9 @@ class AgentEngine:
         """
         yield {"type": "status", "message": "Thinking..."}
 
-        all_tools = await self._tools.list_all_tools()
-        tool_index: dict[str, str] = {t["name"]: t["server"] for t in all_tools}
-
         messages = self._touch_history(message.session_id)
+        all_tools: list[dict[str, Any]] | None = None
+        tool_index: dict[str, str] | None = None
         if messages is None:
             # First turn for this session: seed the durable system prompts and the
             # one-time bootstrap, then keep the list so every later turn inherits it.
@@ -1210,6 +1408,8 @@ class AgentEngine:
             if user_ctx:
                 messages.append(user_ctx)
             if _BOOTSTRAP_SESSIONS:
+                all_tools = await self._tools.list_all_tools()
+                tool_index = {t["name"]: t["server"] for t in all_tools}
                 messages.extend(await self._bootstrap_session(tool_index, all_tools))
             self._histories[message.session_id] = messages
             self._evict_histories()
@@ -1220,6 +1420,19 @@ class AgentEngine:
         messages.append({"role": message.role, "content": message.content})
         self._session_steps[message.session_id] = []
         self._record_turn(message.session_id, "user", message.content)
+
+        if message.role == "user":
+            fast_response = await self._try_fast_path_response(message.content, messages)
+            if fast_response is not None:
+                messages.append({"role": "assistant", "content": fast_response})
+                self._record_turn(message.session_id, "assistant", fast_response)
+                yield {"type": "text", "content": fast_response}
+                return
+
+        if all_tools is None:
+            all_tools = await self._tools.list_all_tools()
+        if tool_index is None:
+            tool_index = {t["name"]: t["server"] for t in all_tools}
 
         final_text = ""
         async for event in self._stream_react_loop(
@@ -2324,8 +2537,15 @@ class AgentEngine:
                 name=f"distill:{session_id}",
             )
 
-        # Fire-and-forget: update user profile from this conversation.
-        if self._profile_store is not None and not hit_cap and final_response:
+        # Fire-and-forget: propose profile updates only when the user gives a
+        # durable preference/profile signal. Ordinary tasks should not spend an
+        # extra LLM call guessing user traits.
+        if (
+            self._profile_store is not None
+            and not hit_cap
+            and final_response
+            and _profile_update_signal(original_prompt)
+        ):
             convo = f"User: {original_prompt}\nAssistant: {final_response}"
             asyncio.create_task(  # noqa: RUF006
                 extract_and_update_user_profile(
@@ -2806,6 +3026,80 @@ class AgentEngine:
             "role": "system",
             "content": f"User context: {ctx}",
         }
+
+    async def _try_fast_path_response(
+        self,
+        user_text: str,
+        messages: list[dict[str, Any]],
+    ) -> str | None:
+        """Answer cheap read-only requests without entering the ReAct/LLM loop."""
+        if _is_simple_environment_request(user_text):
+            getter = getattr(self._tools, "get_system_environment", None)
+            if callable(getter):
+                return _format_system_environment_report(getter())
+            return "System environment is unavailable from this tool manager."
+
+        if _is_current_cwd_request(user_text):
+            cwd = getattr(self._tools, "current_cwd", None) or os.getcwd()
+            return f"Current working directory: `{cwd}`"
+
+        if _is_last_url_request(user_text):
+            url = _latest_service_url_from_history(messages)
+            if url:
+                return f"Last service URL: {url}"
+
+        port = _extract_simple_port_status_request(user_text)
+        if port is not None:
+            return self._fast_port_status(port)
+
+        if _is_public_ipv4_request(user_text):
+            return await self._fast_public_ipv4()
+
+        return None
+
+    def _fast_port_status(self, port: int) -> str:
+        getter = getattr(self._tools, "get_filesystem_process_evidence", None)
+        if not callable(getter):
+            return f"Port {port}: status unavailable; process evidence tool is not configured."
+        try:
+            raw = getter(ports=[port], include_background_log=False)
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception as exc:
+            return f"Port {port}: status unavailable ({exc})."
+        ports = data.get("ports") if isinstance(data, dict) else None
+        entry = ports[0] if isinstance(ports, list) and ports else {}
+        if not isinstance(entry, dict):
+            return f"Port {port}: no listener detected."
+        if entry.get("connectable"):
+            process = entry.get("process") or entry.get("pid") or "unknown process"
+            return f"Port {port}: open on 127.0.0.1 ({process})."
+        reason = entry.get("error") or "no listener detected"
+        return f"Port {port}: closed or unreachable on 127.0.0.1 ({reason})."
+
+    async def _fast_public_ipv4(self) -> str:
+        runner = getattr(self._tools, "execute_terminal_command", None)
+        if not callable(runner):
+            return "Public IPv4 lookup is unavailable; terminal execution is not configured."
+        command = (
+            "curl -4 -s --max-time 8 https://api.ipify.org || "
+            "curl -4 -s --max-time 8 https://icanhazip.com || "
+            "curl -4 -s --max-time 8 https://checkip.amazonaws.com"
+        )
+        try:
+            result = await runner(command)
+        except Exception as exc:
+            return f"Public IPv4 lookup failed: {exc}"
+        stdout = str((result or {}).get("stdout") or "").strip()
+        stderr = str((result or {}).get("stderr") or "").strip()
+        match = _IPV4_RE.search(stdout)
+        if not match:
+            detail = stderr or stdout or "no address returned"
+            return f"Public IPv4 lookup failed: {detail}"
+        return (
+            f"Public IPv4: {match.group(0)}\n\n"
+            "This identifies the outbound network address only. It does not prove "
+            "that any local port is reachable from the public internet."
+        )
 
     async def _schedule_task(
         self,
@@ -3617,13 +3911,18 @@ def _summarize_host_environment(
 
     sandbox_line = ""
     if sandbox:
-        mode = sandbox.get("mode", "unknown")
-        image = sandbox.get("image", "")
-        workdir = sandbox.get("container_workdir", "/workspace")
-        sandbox_line = (
-            f"Sandbox: {mode} (image={image}; workdir={workdir}) â€” "
-            f"commands run inside an isolated Linux container; apt-get IS available.\n"
-        )
+        mode = str(sandbox.get("mode", "unknown") or "unknown")
+        image = str(sandbox.get("image") or "")
+        workdir = sandbox.get("container_workdir") or sandbox.get("workdir") or "/workspace"
+        details = []
+        if image:
+            details.append(f"image={image}")
+        details.append(f"workdir={workdir}")
+        if mode.lower() == "docker":
+            execution_note = "commands run inside the active Docker sandbox."
+        else:
+            execution_note = f"commands run inside the active {mode} sandbox."
+        sandbox_line = f"Sandbox: {mode} ({'; '.join(details)}) - {execution_note}\n"
     elif host_execution_disabled_reason:
         sandbox_line = (
             "SANDBOX: FAILED TO START; HOST EXECUTION IS BLOCKED. Terminal, "
@@ -3640,6 +3939,8 @@ def _summarize_host_environment(
             "All commands execute DIRECTLY on the host OS below â€” treat it as a plain "
             "host session; do NOT assume a Linux container environment.\n"
         )
+    else:
+        sandbox_line = "Sandbox: off - commands execute directly in the host environment.\n"
 
     return (
         "=== EXECUTION ENVIRONMENT (authoritative - do not guess the platform) ===\n"
@@ -3655,6 +3956,51 @@ def _summarize_host_environment(
         "is already on PATH, just use it directly. These facts are stated here, so do "
         "NOT re-probe them with repeated which/where/--version commands.\n"
         "===================================================================="
+    )
+
+
+def _format_system_environment_report(raw: str) -> str:
+    try:
+        data = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict) or not data:
+        return "System environment is unavailable from the active tool environment."
+
+    shell = data.get("shell") if isinstance(data.get("shell"), dict) else {}
+    user = data.get("user") if isinstance(data.get("user"), dict) else {}
+    disk = data.get("disk_cwd") if isinstance(data.get("disk_cwd"), dict) else {}
+    runtimes = data.get("runtimes") if isinstance(data.get("runtimes"), dict) else {}
+    sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
+
+    available = sorted(name for name, present in runtimes.items() if present)
+    unavailable = sorted(name for name, present in runtimes.items() if not present)
+    sandbox_mode = sandbox.get("mode") if sandbox else "off"
+    sandbox_detail = (
+        f"{sandbox_mode}"
+        + (f" at {sandbox.get('container_workdir')}" if sandbox.get("container_workdir") else "")
+        if sandbox
+        else "off (commands run directly in the host environment)"
+    )
+    disk_bits = []
+    for label, key in (("total", "total_gb"), ("used", "used_gb"), ("free", "free_gb")):
+        if key in disk:
+            disk_bits.append(f"{label} {disk[key]} GB")
+
+    return "\n".join(
+        [
+            "**System Environment Report**",
+            f"- OS: {data.get('os', 'unknown')} {data.get('os_version', '')}".rstrip(),
+            f"- Machine: {data.get('machine', 'unknown')}",
+            f"- Shell: {shell.get('shell', 'unknown')} ({'POSIX' if shell.get('posix') else 'non-POSIX'})",
+            f"- Sandbox: {sandbox_detail}",
+            f"- User: {user.get('username', 'unknown')} "
+            f"({'root' if user.get('is_root') else 'non-root'}; "
+            f"sudo {'available' if user.get('sudo_available') else 'unavailable'})",
+            f"- Disk: {', '.join(disk_bits) if disk_bits else 'unavailable'}",
+            f"- Runtimes available: {', '.join(available) or 'none detected'}",
+            f"- Runtimes unavailable: {', '.join(unavailable[:12]) or 'none detected'}",
+        ]
     )
 
 

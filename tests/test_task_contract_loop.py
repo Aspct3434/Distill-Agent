@@ -29,6 +29,8 @@ from tools import (  # noqa: E402
     WRITE_TEXT_FILE_TOOL,
 )
 
+TEST_PUBLIC_IPV4 = "203.0.113.42"
+
 
 class _EmptyMemory:
     def retrieve_context(self, query: str, query_type: str) -> dict[str, Any]:
@@ -221,6 +223,36 @@ class _ScriptedStreamingModel:
         return _stream_response(response)
 
 
+class _ForbiddenStreamingModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, **kwargs: Any) -> Any:
+        self.calls += 1
+        raise AssertionError("LLM should not be called for fast-path requests")
+
+
+class _FastPathTools(_FakeTools):
+    def __init__(self) -> None:
+        super().__init__()
+        self.list_calls = 0
+
+    async def list_all_tools(self) -> list[dict[str, Any]]:
+        self.list_calls += 1
+        return await super().list_all_tools()
+
+
+class _PublicIpFastPathTools(_FastPathTools):
+    async def execute_terminal_command(self, command: str) -> dict[str, Any]:
+        self.commands.append(command)
+        return {
+            "exit_code": 0,
+            "stdout": f"{TEST_PUBLIC_IPV4}\n",
+            "stderr": "",
+            "current_working_directory": "/tmp",
+        }
+
+
 def _stream_chunk_builder(chunks: list[Any], messages: Any = None) -> Any:
     return chunks[-1]._response
 
@@ -279,6 +311,26 @@ async def _run_engine_with_script(script: list[Any]) -> tuple[list[dict[str, Any
     return events, tools
 
 
+async def _run_fast_path(prompt: str, tools: _FastPathTools) -> tuple[list[dict[str, Any]], _ForbiddenStreamingModel]:
+    model = _ForbiddenStreamingModel()
+    original_completion = agent_module.litellm.acompletion
+    agent_module.litellm.acompletion = model
+    try:
+        engine = AgentEngine(memory=_EmptyMemory(), tools=tools, model="test-model")
+        events: list[dict[str, Any]] = []
+        async for event in engine.stream_task(
+            NormalizedMessage(
+                session_id=f"fast-{prompt}",
+                role="user",
+                content=prompt,
+            )
+        ):
+            events.append(event)
+        return events, model
+    finally:
+        agent_module.litellm.acompletion = original_completion
+
+
 def _contract_tool(mode: str, evidence: list[str]) -> Any:
     summary = (
         "Serve an HTTP result for the user request."
@@ -308,6 +360,31 @@ def _plan_tool(status: str) -> Any:
             ]
         },
     )
+
+
+def test_system_environment_fast_path_uses_zero_llm_calls() -> None:
+    tools = _FastPathTools()
+
+    events, model = asyncio.run(_run_fast_path("show runtime environment details", tools))
+
+    text = "\n".join(str(event.get("content", "")) for event in events)
+    assert model.calls == 0
+    assert tools.list_calls == 0
+    assert "System Environment Report" in text
+    assert "Sandbox: docker" in text
+
+
+def test_public_ipv4_fast_path_uses_zero_llm_calls() -> None:
+    tools = _PublicIpFastPathTools()
+
+    events, model = asyncio.run(_run_fast_path("what public IPv4 does this runtime use", tools))
+
+    text = "\n".join(str(event.get("content", "")) for event in events)
+    assert model.calls == 0
+    assert tools.list_calls == 0
+    assert tools.commands
+    assert TEST_PUBLIC_IPV4 in text
+    assert "does not prove" in text
 
 
 def test_execute_contract_suppresses_rejected_streamed_prose() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import uuid
@@ -238,9 +239,14 @@ _DEFAULT_PROFILE: dict[str, Any] = {
     "preferences": [],
     "recurring_topics": [],
     "goals": [],
+    "pending_updates": [],
     "last_updated": "",
     "interaction_count": 0,
 }
+
+
+def _fresh_default_profile() -> dict[str, Any]:
+    return copy.deepcopy(_DEFAULT_PROFILE)
 
 
 class UserProfileStore:
@@ -266,24 +272,102 @@ class UserProfileStore:
 
     def update(self, updates: dict[str, Any]) -> None:
         """Merge *updates* into the stored profile and persist."""
-        for key, value in updates.items():
-            if key not in _DEFAULT_PROFILE:
+        self._merge_updates(updates)
+        self._profile["last_updated"] = datetime.now(UTC).isoformat()
+        self._profile["interaction_count"] = self._profile.get("interaction_count", 0) + 1
+        self._save()
+
+    def propose_update(self, updates: dict[str, Any]) -> str | None:
+        """Store extracted profile changes for review instead of injecting them."""
+        filtered = self._filtered_updates(updates)
+        if not filtered:
+            return None
+        pending = self._profile.setdefault("pending_updates", [])
+        if not isinstance(pending, list):
+            pending = []
+            self._profile["pending_updates"] = pending
+        update_id = uuid.uuid4().hex
+        pending.append(
+            {
+                "id": update_id,
+                "updates": filtered,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        self._profile["last_updated"] = datetime.now(UTC).isoformat()
+        self._save()
+        return update_id
+
+    def approve_pending(self, update_id: str | None = None) -> int:
+        """Approve one pending update, or all pending updates when id is omitted."""
+        pending = self._pending_updates()
+        kept: list[dict[str, Any]] = []
+        approved = 0
+        for item in pending:
+            if update_id is not None and item.get("id") != update_id:
+                kept.append(item)
                 continue
+            updates = item.get("updates")
+            if isinstance(updates, dict):
+                self._merge_updates(updates)
+                approved += 1
+        self._profile["pending_updates"] = kept
+        if approved:
+            self._profile["last_updated"] = datetime.now(UTC).isoformat()
+            self._profile["interaction_count"] = self._profile.get("interaction_count", 0) + approved
+            self._save()
+        return approved
+
+    def reject_pending(self, update_id: str | None = None) -> int:
+        """Reject one pending update, or all pending updates when id is omitted."""
+        pending = self._pending_updates()
+        if update_id is None:
+            rejected = len(pending)
+            self._profile["pending_updates"] = []
+        else:
+            kept = [item for item in pending if item.get("id") != update_id]
+            rejected = len(pending) - len(kept)
+            self._profile["pending_updates"] = kept
+        if rejected:
+            self._profile["last_updated"] = datetime.now(UTC).isoformat()
+            self._save()
+        return rejected
+
+    def _merge_updates(self, updates: dict[str, Any]) -> None:
+        for key, value in self._filtered_updates(updates).items():
             current = self._profile.get(key)
             if isinstance(current, list) and isinstance(value, list):
-                # Merge lists, de-dup while preserving order
                 seen = set(current)
                 for item in value:
                     if item and item not in seen:
                         current.append(item)
                         seen.add(item)
-                # Keep at most 20 items per list
                 self._profile[key] = current[-20:]
             elif value:
                 self._profile[key] = value
-        self._profile["last_updated"] = datetime.now(UTC).isoformat()
-        self._profile["interaction_count"] = self._profile.get("interaction_count", 0) + 1
-        self._save()
+
+    def _filtered_updates(self, updates: dict[str, Any]) -> dict[str, Any]:
+        filtered: dict[str, Any] = {}
+        for key, value in updates.items():
+            if key not in _DEFAULT_PROFILE or key in {
+                "pending_updates",
+                "last_updated",
+                "interaction_count",
+            }:
+                continue
+            if isinstance(value, list):
+                cleaned = [item for item in value if item]
+                if cleaned:
+                    filtered[key] = cleaned
+            elif value:
+                filtered[key] = value
+        return filtered
+
+    def _pending_updates(self) -> list[dict[str, Any]]:
+        pending = self._profile.get("pending_updates")
+        if not isinstance(pending, list):
+            return []
+        return [item for item in pending if isinstance(item, dict)]
 
     def as_context_string(self) -> str:
         """Return a concise single-line summary for system prompt injection."""
@@ -302,7 +386,7 @@ class UserProfileStore:
         return " | ".join(parts) if parts else ""
 
     def clear(self) -> None:
-        self._profile = dict(_DEFAULT_PROFILE)
+        self._profile = _fresh_default_profile()
         self._save()
 
     # ------------------------------------------------------------------
@@ -313,10 +397,10 @@ class UserProfileStore:
         try:
             if self._path.exists():
                 data = json.loads(self._path.read_text(encoding="utf-8"))
-                return {**_DEFAULT_PROFILE, **data}
+                return {**_fresh_default_profile(), **data}
         except Exception:
             pass
-        return dict(_DEFAULT_PROFILE)
+        return _fresh_default_profile()
 
     def _save(self) -> None:
         try:

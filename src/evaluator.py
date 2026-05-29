@@ -966,7 +966,12 @@ async def extract_and_update_user_profile(
         raw = re.sub(r"\n?```$", "", raw)
         updates = json.loads(raw)
         if isinstance(updates, dict) and updates:
-            profile_store.update(updates)
-            logger.debug("User profile updated from conversation")
+            proposer = getattr(profile_store, "propose_update", None)
+            if callable(proposer):
+                update_id = proposer(updates)
+                logger.debug("User profile update proposed: %s", update_id)
+            else:
+                profile_store.update(updates)
+                logger.debug("User profile updated from conversation")
     except Exception as exc:
         logger.debug("Profile extraction skipped: %s", exc)
