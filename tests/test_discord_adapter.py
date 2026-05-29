@@ -169,6 +169,12 @@ class TestDiscordGating:
         await adapter._handle_message(_make_msg("hi", user_id="stranger"))
         mock_http.post.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_passive_greeting_sends_welcome_without_turn(self, adapter, mock_http) -> None:
+        await adapter._handle_message(_make_msg("hello"))
+        assert any("Send me a task" in m for m in _message_contents(mock_http))
+        assert _typing_calls(mock_http) == []
+
 
 # ---------------------------------------------------------------------------
 # Streaming behaviour
@@ -178,13 +184,13 @@ class TestDiscordGating:
 class TestDiscordStreaming:
     @pytest.mark.asyncio
     async def test_typing_indicator_sent(self, adapter, mock_http) -> None:
-        await adapter._handle_message(_make_msg("hello"))
+        await adapter._handle_message(_make_msg("summarize this"))
         assert len(_typing_calls(mock_http)) >= 1
 
     @pytest.mark.asyncio
     async def test_final_answer_sent(self, adapter, mock_http) -> None:
-        await adapter._handle_message(_make_msg("hello"))
-        assert any("reply:hello" in m for m in _message_contents(mock_http))
+        await adapter._handle_message(_make_msg("summarize this"))
+        assert any("reply:summarize this" in m for m in _message_contents(mock_http))
 
     @pytest.mark.asyncio
     async def test_session_id_scoped_to_channel(self, adapter) -> None:

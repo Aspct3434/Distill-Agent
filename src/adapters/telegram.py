@@ -31,7 +31,11 @@ from typing import Any
 
 import httpx
 
-from adapters._commands import is_stop_command
+from adapters._commands import (
+    PASSIVE_GREETING_RESPONSE,
+    is_passive_greeting,
+    is_stop_command,
+)
 from adapters._progress import format_tool_call
 from adapters._telegram_format import html_to_plain, render_telegram_html_chunks
 
@@ -52,7 +56,7 @@ StreamFn = Callable[[str, str], AsyncIterator[dict[str, Any]]]
 # Clears a session's history; returns True if a session existed.
 ResetFn = Callable[[str], bool]
 
-_WELCOME = "Hello! Send me a task and I'll get it done. Type /help for commands."
+_WELCOME = PASSIVE_GREETING_RESPONSE
 _HELP = (
     "Commands:\n"
     "/new (or /reset) — start a fresh conversation\n"
@@ -282,6 +286,12 @@ class TelegramAdapter:
                 text = await self._handle_voice(chat_id, str(voice["file_id"]))
             if not text:
                 return
+
+        if is_passive_greeting(text):
+            await self._send_message(
+                chat_id, _WELCOME, reply_to_message_id=message_id
+            )
+            return
 
         # Control commands are handled out-of-band so stop/cancel can interrupt.
         if text.startswith("/") or is_stop_command(text):

@@ -38,7 +38,11 @@ from typing import Any
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
-from adapters._commands import is_stop_command
+from adapters._commands import (
+    PASSIVE_GREETING_RESPONSE,
+    is_passive_greeting,
+    is_stop_command,
+)
 from adapters._progress import format_tool_call
 
 logger = logging.getLogger(__name__)
@@ -321,6 +325,10 @@ class DiscordAdapter:
             return
 
         channel_id: str = str(data.get("channel_id") or "")
+
+        if is_passive_greeting(content):
+            await self._post_message(channel_id, PASSIVE_GREETING_RESPONSE)
+            return
 
         # Control commands are handled out-of-band so stop/cancel can interrupt.
         if content.startswith("/") or is_stop_command(content):

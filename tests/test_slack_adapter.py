@@ -132,6 +132,11 @@ class TestSlackGating:
         await adapter._handle_event(_msg("hi", user="U_OTHER"))
         mock_http.post.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_passive_greeting_sends_welcome_without_turn(self, adapter, mock_http) -> None:
+        await adapter._handle_event(_msg("hello"))
+        assert any("Send me a task" in m for m in _posts(mock_http))
+
 
 # ---------------------------------------------------------------------------
 # Streaming + commands
@@ -141,8 +146,8 @@ class TestSlackGating:
 class TestSlackStreaming:
     @pytest.mark.asyncio
     async def test_final_answer_posted(self, adapter, mock_http) -> None:
-        await adapter._handle_event(_msg("hello"))
-        assert any("reply:hello" in m for m in _posts(mock_http))
+        await adapter._handle_event(_msg("summarize this"))
+        assert any("reply:summarize this" in m for m in _posts(mock_http))
 
     @pytest.mark.asyncio
     async def test_session_scoped_to_channel(self, adapter) -> None:
@@ -153,7 +158,7 @@ class TestSlackStreaming:
             yield {"type": "text", "content": "ok"}
 
         adapter._stream_fn = _cap
-        await adapter._handle_event(_msg("hi", channel="C9"))
+        await adapter._handle_event(_msg("summarize this", channel="C9"))
         assert captured == ["slack:C9"]
 
     @pytest.mark.asyncio

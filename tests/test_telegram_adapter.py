@@ -200,6 +200,12 @@ class TestTelegramGating:
         # No typing action for a rejected message.
         assert _chat_actions(mock_http) == []
 
+    @pytest.mark.asyncio
+    async def test_passive_greeting_sends_welcome_without_turn(self, adapter, mock_http) -> None:
+        await adapter._handle_update(_make_update(6, 42, 1, "hello"))
+        assert any("Send me a task" in t for t in _sent_texts(mock_http))
+        assert _chat_actions(mock_http) == []
+
 
 # ---------------------------------------------------------------------------
 # Streaming behaviour
@@ -209,15 +215,15 @@ class TestTelegramGating:
 class TestTelegramStreaming:
     @pytest.mark.asyncio
     async def test_typing_action_sent_immediately(self, adapter, mock_http) -> None:
-        await adapter._handle_update(_make_update(6, 42, 1, "hello"))
+        await adapter._handle_update(_make_update(6, 42, 1, "summarize this"))
         actions = _chat_actions(mock_http)
         assert len(actions) >= 1
         assert actions[0].kwargs["json"]["action"] == "typing"
 
     @pytest.mark.asyncio
     async def test_final_answer_sent(self, adapter, mock_http) -> None:
-        await adapter._handle_update(_make_update(7, 42, 1, "hello"))
-        assert any("reply to: hello" in t for t in _sent_texts(mock_http))
+        await adapter._handle_update(_make_update(7, 42, 1, "summarize this"))
+        assert any("reply to: summarize this" in t for t in _sent_texts(mock_http))
 
     @pytest.mark.asyncio
     async def test_tool_calls_shown_as_progress(self, mock_http) -> None:

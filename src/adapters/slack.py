@@ -32,7 +32,11 @@ from typing import Any
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
-from adapters._commands import is_stop_command
+from adapters._commands import (
+    PASSIVE_GREETING_RESPONSE,
+    is_passive_greeting,
+    is_stop_command,
+)
 from adapters._progress import format_tool_call
 
 logger = logging.getLogger(__name__)
@@ -207,6 +211,10 @@ class SlackAdapter:
             return
 
         channel: str = str(event.get("channel") or "")
+
+        if is_passive_greeting(text):
+            await self._post_message(channel, PASSIVE_GREETING_RESPONSE)
+            return
 
         if text.startswith("/") or is_stop_command(text):
             await self._handle_command(channel, text)
