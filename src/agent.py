@@ -2260,6 +2260,26 @@ class AgentEngine:
                     break
 
                 tool_calls = assistant_msg.tool_calls
+
+                # Parse each call's JSON arguments defensively. Frontier
+                # function-calling APIs rarely emit malformed JSON, but locally
+                # served / smaller models do (truncated calls, trailing prose,
+                # non-object payloads). A bad parse must not crash the loop:
+                # the call is dropped from execution and the error is fed back
+                # as a tool result so the model can re-issue it next turn.
+                calls: list[tuple[str, str, dict[str, Any]]] = []
+                malformed_calls: list[tuple[str, str, str]] = []
+                for tc in tool_calls:
+                    name = str(tc.function.name)
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                        if not isinstance(args, dict):
+                            raise ValueError("arguments must be a JSON object")
+                    except (TypeError, ValueError) as exc:
+                        malformed_calls.append((str(tc.id), name, str(exc)))
+                        continue
+                    calls.append((str(tc.id), name, args))
+
                 steps.append(
                     ExecutionStep(
                         kind="llm_tool_decision",
@@ -2267,12 +2287,8 @@ class AgentEngine:
                         metadata={
                             "iteration": iteration + 1,
                             "tool_calls": [
-                                {
-                                    "id": tc.id,
-                                    "name": tc.function.name,
-                                    "arguments": json.loads(tc.function.arguments),
-                                }
-                                for tc in tool_calls
+                                {"id": tc_id, "name": name, "arguments": args}
+                                for tc_id, name, args in calls
                             ],
                         },
                     )
@@ -2280,14 +2296,44 @@ class AgentEngine:
 
                 messages.append(_serialise_assistant_msg(assistant_msg))
 
+                # Every assistant tool_call needs a matching tool response or the
+                # next provider request is invalid. Synthesise an error result
+                # for each call whose arguments failed to parse.
+                for tc_id, name, error in malformed_calls:
+                    content = (
+                        f"Tool call to `{name}` was rejected: its arguments were "
+                        f"not valid JSON ({error}). Re-issue the call with a single "
+                        "well-formed JSON object as the arguments."
+                    )
+                    steps.append(
+                        ExecutionStep(
+                            kind="tool_result",
+                            content=content,
+                            metadata={
+                                "tool_name": name,
+                                "tool_call_id": tc_id,
+                                "server": "__builtin__",
+                                "arguments": {},
+                                "is_error": True,
+                            },
+                        )
+                    )
+                    messages.append(
+                        {"role": "tool", "tool_call_id": tc_id, "content": content}
+                    )
+                    yield _make_tool_result_event(
+                        tool_name=name,
+                        tool_call_id=tc_id,
+                        content=content,
+                        is_error=True,
+                    )
+
                 # Announce every call up front so the UI ordering is preserved.
-                calls: list[tuple[str, str, dict[str, Any]]] = []
-                for tc in tool_calls:
-                    args = json.loads(tc.function.arguments)
-                    name = str(tc.function.name)
-                    if _should_emit_tool_call_progress(name, args, calls):
+                announced: list[tuple[str, str, dict[str, Any]]] = []
+                for tc_id, name, args in calls:
+                    if _should_emit_tool_call_progress(name, args, announced):
                         yield {"type": "tool_call", "tool": name, "params": args}
-                    calls.append((str(tc.id), name, args))
+                    announced.append((tc_id, name, args))
 
                 iter_error_count, tool_result_events = await self._dispatch_tool_calls(
                     calls=calls,
@@ -2309,7 +2355,9 @@ class AgentEngine:
                 contract_text_rejections = 0
 
                 # Escalate to the strong model when the fast one keeps failing.
-                if tool_calls and iter_error_count == len(tool_calls):
+                # Malformed tool calls (dropped before dispatch) count as errors.
+                total_iter_errors = iter_error_count + len(malformed_calls)
+                if tool_calls and total_iter_errors == len(tool_calls):
                     consecutive_error_iters += 1
                 else:
                     consecutive_error_iters = 0

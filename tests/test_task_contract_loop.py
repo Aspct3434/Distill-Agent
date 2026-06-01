@@ -518,6 +518,42 @@ def test_answer_contract_streams_tokens_immediately() -> None:
     )
 
 
+def test_malformed_tool_call_arguments_recover_without_crashing() -> None:
+    # A model emits a tool call whose arguments are not valid JSON (truncated /
+    # not an object). The loop must not crash on json.loads; it should feed the
+    # error back as a tool result and let the next turn recover.
+    truncated_args = SimpleNamespace(
+        id="call_bad_json",
+        function=SimpleNamespace(name="set_task_contract", arguments="{not valid json"),
+    )
+    non_object_args = SimpleNamespace(
+        id="call_non_object",
+        function=SimpleNamespace(name="set_task_contract", arguments="[1, 2, 3]"),
+    )
+    script = [
+        _completion(tool_calls=[truncated_args]),
+        _completion(tool_calls=[non_object_args]),
+        _completion(tool_calls=[_contract_tool("answer", ["none"])]),
+        _completion(content="Sleep supports memory and recovery."),
+    ]
+
+    events, _ = asyncio.run(_run_engine_with_script(script))
+
+    error_events = [
+        event
+        for event in events
+        if event.get("type") == "tool_result" and event.get("is_error")
+    ]
+    assert error_events, "malformed tool call should surface a tool-result error"
+    assert all("valid JSON" in str(e.get("content", "")) for e in error_events)
+    # The agent recovers and still produces the final answer.
+    assert any(
+        event.get("type") == "text"
+        and "Sleep supports memory" in event.get("content", "")
+        for event in events
+    )
+
+
 def test_empty_tool_call_content_is_sanitized_before_next_request() -> None:
     script = [
         _completion(content="", tool_calls=[_contract_tool("answer", ["none"])]),
