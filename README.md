@@ -148,7 +148,7 @@ You can also clone the repo first and run `scripts/bootstrap.ps1` (Windows) or
 Run the interactive installer with `npx` (no global install required):
 
 ```powershell
-npx @aspct3434/distill-agent install
+npx @aspct/distill-agent install
 ```
 
 Prefer pinning to the exact GitHub revision? Use the repo form:
@@ -159,7 +159,7 @@ npx --yes github:Aspct3434/agent-ai install
 
 After installation, use the CLI to manage the agent:
 ```bash
-npm i -g @aspct3434/distill-agent
+npm i -g @aspct/distill-agent
 distill                           # Open the interactive terminal UI
 distill start                     # Start the backend and control panel
 distill logs                      # View running logs
@@ -167,10 +167,10 @@ distill update                    # Pull the latest changes
 distill doctor                    # Diagnose the install and environment
 
 # npx works too if you prefer not to install globally:
-npx @aspct3434/distill-agent start    # Start the backend and control panel
-npx @aspct3434/distill-agent logs     # View running logs
-npx @aspct3434/distill-agent update   # Pull the latest changes
-npx @aspct3434/distill-agent doctor   # Diagnose the install and environment
+npx @aspct/distill-agent start    # Start the backend and control panel
+npx @aspct/distill-agent logs     # View running logs
+npx @aspct/distill-agent update   # Pull the latest changes
+npx @aspct/distill-agent doctor   # Diagnose the install and environment
 ```
 
 ## ⚙️ Configuration

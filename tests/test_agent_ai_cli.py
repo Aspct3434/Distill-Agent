@@ -100,5 +100,5 @@ def test_npm_cli_security_acknowledgement_blocks_install(tmp_path: Path) -> None
 def test_root_package_exposes_agent_ai_bin() -> None:
     package = (PROJECT_ROOT / "package.json").read_text(encoding="utf-8")
 
-    assert '"name": "@aspct3434/distill-agent"' in package
+    assert '"name": "@aspct/distill-agent"' in package
     assert '"distill": "bin/distill.js"' in package

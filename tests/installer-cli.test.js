@@ -70,7 +70,7 @@ function assertIncludes(text, expected) {
   assertIncludes(result.stdout, 'AGENT_FINAL_MAX_TOKENS="1536"');
   assertIncludes(result.stdout, 'AGENT_SANDBOX_HOST_FALLBACK="false"');
   assertIncludes(result.stdout, 'AGENT_USE_HYBRID_MEMORY="false"');
-  assertIncludes(result.stdout, "Start later with: npx @aspct3434/distill-agent start");
+  assertIncludes(result.stdout, "Start later with: npx @aspct/distill-agent start");
   assertIncludes(result.stdout, "Installation Summary");
   assertIncludes(result.stdout, "missing");
 }
@@ -158,8 +158,8 @@ function assertIncludes(text, expected) {
   assertIncludes(result.stdout, "distill install");
   assertIncludes(result.stdout, "--memory lite|hybrid");
   assertIncludes(result.stdout, "distill                         Launch the interactive Terminal UI");
-  assertIncludes(result.stdout, "npx @aspct3434/distill-agent install");
-  assertIncludes(result.stdout, "npx @aspct3434/distill-agent doctor");
+  assertIncludes(result.stdout, "npx @aspct/distill-agent install");
+  assertIncludes(result.stdout, "npx @aspct/distill-agent doctor");
 }
 
 {

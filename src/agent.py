@@ -180,6 +180,7 @@ def _evidence_items_from_payload(
         if isinstance(stdout, str) and stdout.strip():
             items.append(("Command output", _short_evidence_value(stdout)))
 
+
     if payload.get("status") == "launched" and payload.get("pid"):
         items.append(("Process", f"PID {payload['pid']}"))
         log_file = payload.get("log_file")
