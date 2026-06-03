@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "agent-ai"
+name = "distill-agent"
 version = "0.1.0"
 description = "A production-grade ReAct agent with task-contract execution, MCP tool integration, and skill distillation"
 requires-python = ">=3.11"

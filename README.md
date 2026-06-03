@@ -105,6 +105,24 @@ control-panel/      -- React + Tailwind chat UI with live token streaming
 * **Universal Sandboxing**: Run shell operations locally, in Docker, or via serverless platforms (Daytona, E2B, Modal).
 * **Shareable Skills**: Export and import distilled skills via the open `SKILL.md` format.
 
+## 📊 Production Readiness
+
+Distill is a focused research framework with a stable core and a set of more
+experimental capabilities around it. This matrix is an honest snapshot of where
+each subsystem stands — treat anything marked *Experimental* as subject to change.
+
+| Subsystem | Maturity | Notes |
+|---|---|---|
+| FastAPI gateway (auth, rate-limit, session FIFO lanes) | **Stable** | Token-gated; returns 503 until `AGENT_API_TOKEN` is set. |
+| Contract / evidence-gated ReAct loop | **Stable** | Core differentiator; final answer gated on physical evidence. |
+| SQLite checkpointer + session store | **Stable** | Durable per-session state and history. |
+| Local & Docker sandbox | **Stable** | Default execution paths. |
+| Serverless sandboxes (Daytona / E2B / Modal) | **Experimental** | Opt-in via `AGENT_SANDBOX`; less exercised. |
+| ChromaDB semantic + Neo4j graph memory | **Optional** | Degrade gracefully when the backends are absent. |
+| Skill distillation & evolution | **Experimental** | Auto-synthesised skills are versioned and auto-rolled-back on regression. |
+| Sub-agent delegation (`delegate_task`) | **Experimental** | Bounded delegated execution — see [ARCHITECTURE.md](ARCHITECTURE.md). |
+| Messaging adapters (Telegram / Discord / Slack / Email) | **Adapter-tested** | Off by default; activate per token. Local-only without public ingress. |
+
 ## 🚀 Quick Start
 
 The fastest way to run Distill locally is using Docker Compose:
