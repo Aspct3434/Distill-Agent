@@ -364,8 +364,12 @@ def _sanitize_contract_environment_wording(text: str) -> str:
 
 
 def _normalise_task_contract(
-    arguments: dict[str, Any],
+    arguments: Any,
 ) -> tuple[dict[str, Any], str | None]:
+    # json.loads on tool-call arguments can yield any JSON value (list, str,
+    # number); only an object is a usable contract payload.
+    if not isinstance(arguments, dict):
+        return {}, "arguments must be a JSON object"
     mode = arguments.get("mode")
     if mode not in {"answer", "execute"}:
         return {}, "mode must be 'answer' or 'execute'"
