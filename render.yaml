@@ -1,0 +1,47 @@
+# Render Blueprint — one-click deploy of the Distill agent gateway.
+# Spec: https://render.com/docs/blueprint-spec
+#
+# Click the "Deploy to Render" button in the README. Render builds the
+# Dockerfile, generates a strong gateway token for you, and prompts for the
+# values marked `sync: false`. Set ONE provider key + the three model vars
+# (and, optionally, a Telegram bot token) and you're live.
+services:
+  - type: web
+    name: distill-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Render injects $PORT at runtime; bind to it (the Dockerfile default is 8000).
+    dockerCommand: sh -c "python -m uvicorn gateway:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    autoDeploy: false
+    # To persist memory across restarts, switch to a paid instance type and add:
+    #   disk:
+    #     name: distill-data
+    #     mountPath: /app/data
+    #     sizeGB: 1
+    envVars:
+      # Run lean: SQLite-backed session memory, no Neo4j/Chroma needed to start.
+      - key: AGENT_USE_HYBRID_MEMORY
+        value: "false"
+      # A strong gateway token is generated once. Read it from the Render
+      # dashboard (service → Environment) to call protected API endpoints.
+      - key: AGENT_API_TOKEN
+        generateValue: true
+      # ── Pick ONE provider: set its key, then point the models at it ──────
+      - key: AGENT_MODEL          # e.g. gpt-4o  |  claude-sonnet-4-6  |  moonshot/kimi-k2.6
+        sync: false
+      - key: FAST_AGENT_MODEL
+        sync: false
+      - key: STRONG_AGENT_MODEL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MOONSHOT_API_KEY
+        sync: false
+      # ── Optional: text your agent from Telegram (create a bot via @BotFather) ──
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ALLOWED_IDS
+        sync: false

@@ -2,7 +2,9 @@
   <img src="docs/assets/distill-terminal-banner.svg" alt="Colored Distill terminal banner" width="780">
 </p>
 
-A production-grade ReAct agent built for reliability. Features **task-contract execution** to prevent hallucination, **skill distillation** to evolve its own tools, **hybrid memory**, and a real-time streaming control panel.
+A self-hosted AI agent **that grows with you** — it learns your projects across sessions, writes its own reusable skills from experience, and reaches you on the channels you already use.
+
+What makes Distill different from other personal agents: it doesn't just *claim* a task is done. Every run is governed by a **task contract** — the agent must produce real evidence (a file written, a test passing, a command succeeding) before it's allowed to finish, which stops the confident-but-wrong "all done!" failure mode. And when it distills a new skill, that skill is **evidence-gated and auto-rolled-back** if a newer version measurably regresses. Persistent **hybrid memory**, a real-time streaming control panel, and Telegram/Discord/Slack/email adapters round it out.
 
 ### Distill TUI
 
@@ -125,7 +127,34 @@ each subsystem stands — treat anything marked *Experimental* as subject to cha
 
 ## 🚀 Quick Start
 
-The fastest way to run Distill locally is using Docker Compose:
+### Deploy in one click
+
+Spin up the agent gateway in the cloud, add your LLM API key (and optionally a
+Telegram bot token), and text your agent. Runs lean — SQLite-backed memory, no
+database to provision.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Aspct3434/Distill-Agent)
+&nbsp;
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new)
+
+* **Render** reads [`render.yaml`](render.yaml), generates a gateway token for
+  you, and prompts for your provider key + models.
+* **Railway** uses [`railway.json`](railway.json): create a project from this
+  repo, then set `AGENT_API_TOKEN`, `AGENT_MODEL`, and your provider key.
+* **Fly.io**: `fly launch --copy-config` against [`fly.toml`](fly.toml), then
+  `fly secrets set …` (commands are in the file header).
+
+### Run locally — one command
+
+```bash
+./scripts/quickstart.sh
+```
+
+Generates strong secrets, creates your env file, and brings the full stack up
+with Docker Compose. Add your LLM API key to `an-api.env` and re-run.
+
+<details>
+<summary>Manual Docker Compose</summary>
 
 ```bash
 # 1. Copy the environment template
@@ -141,6 +170,7 @@ echo "NEO4J_PASSWORD=$(openssl rand -hex 24)" >> .env
 # 4. Start the application
 docker compose up -d --build
 ```
+</details>
 
 * **Control Panel (UI)**: `http://localhost:5173`
 * **API / Docs**: `http://localhost:8000/docs`

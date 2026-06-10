@@ -1,0 +1,37 @@
+# Fly.io deploy of the Distill agent gateway.
+#
+#   fly launch --copy-config --no-deploy        # creates the app from this file
+#   fly volumes create distill_data --size 1    # optional: persist memory
+#   fly secrets set \
+#     AGENT_API_TOKEN="$(openssl rand -hex 32)" \
+#     AGENT_MODEL="gpt-4o" FAST_AGENT_MODEL="gpt-4o" STRONG_AGENT_MODEL="gpt-4o" \
+#     OPENAI_API_KEY="sk-..."                    # or your provider of choice
+#   fly deploy
+#
+app = "distill-agent"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Run lean: SQLite-backed session memory, no Neo4j/Chroma needed to start.
+  AGENT_USE_HYBRID_MEMORY = "false"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[http_service.checks]]
+  path = "/health"
+  interval = "30s"
+  timeout = "5s"
+
+# Optional: persist /app/data (sessions, checkpoints, skills) across restarts.
+# Requires `fly volumes create distill_data --size 1`.
+[mounts]
+  source = "distill_data"
+  destination = "/app/data"
