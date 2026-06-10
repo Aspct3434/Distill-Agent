@@ -473,13 +473,21 @@ def _build_memory() -> Any:
     if os.getenv("AGENT_USE_HYBRID_MEMORY", "true").lower() not in {"1", "true", "yes", "on"}:
         return _EmptyMemory()
 
+    neo4j_password = os.getenv("NEO4J_PASSWORD")
+    if not neo4j_password:
+        # Never fall back to well-known default credentials.
+        logger.warning(
+            "NEO4J_PASSWORD is not set; skipping HybridMemory and using empty memory."
+        )
+        return _EmptyMemory()
+
     try:
         from memory import HybridMemory
 
         return HybridMemory(
             neo4j_uri=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
             neo4j_user=os.getenv("NEO4J_USER", "neo4j"),
-            neo4j_password=os.getenv("NEO4J_PASSWORD", "neo4j"),
+            neo4j_password=neo4j_password,
             chroma_path=os.getenv("CHROMA_PATH", "./chroma_db"),
         )
     except Exception as exc:

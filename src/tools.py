@@ -729,7 +729,9 @@ class _DockerSandbox(_ScriptSandbox):
         """
         if not _SANDBOX_BASELINE_PACKAGES or not self._container_id:
             return
-        pkgs = " ".join(_SANDBOX_BASELINE_PACKAGES)
+        # shlex.quote each name so a crafted package list can't inject shell
+        # commands into the docker-exec'd bash string.
+        pkgs = " ".join(shlex.quote(p) for p in _SANDBOX_BASELINE_PACKAGES)
         logger.info("Installing sandbox baseline packages: %s …", pkgs)
         result = subprocess.run(
             [

@@ -435,8 +435,22 @@ fi
 rm -f "$tmp"
 echo "Wrote $ENV_FILE"
 
+# docker-compose.yml requires NEO4J_PASSWORD (no insecure default). Compose
+# reads interpolation variables from .env, so generate a random one if absent.
+ensure_neo4j_password() {
+  local compose_env="$ROOT_DIR/.env"
+  [[ -n "${NEO4J_PASSWORD:-}" ]] && return 0
+  [[ -f "$compose_env" ]] && grep -q '^NEO4J_PASSWORD=' "$compose_env" && return 0
+  local pw
+  pw="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  printf 'NEO4J_PASSWORD=%s\n' "$pw" >> "$compose_env"
+  chmod 600 "$compose_env" 2>/dev/null || true
+  echo "Generated NEO4J_PASSWORD in $compose_env"
+}
+
 if [[ "$NO_START" -eq 0 ]]; then
   if [[ "$sandbox" == "on" ]]; then
+    ensure_neo4j_password
     (cd "$ROOT_DIR" && INSTALL_ML="$use_hybrid" AGENT_USE_HYBRID_MEMORY="$use_hybrid" docker compose up -d --build)
   else
     python_bin="$(ensure_python)"

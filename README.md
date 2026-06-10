@@ -134,7 +134,11 @@ cp an-api.env.example an-api.env
 # 2. Add your LLM API Key to an-api.env (e.g., MOONSHOT_API_KEY or OPENAI_API_KEY)
 # By default, Distill uses LiteLLM and supports OpenAI, Anthropic, Gemini, Ollama, etc.
 
-# 3. Start the application
+# 3. Set a Neo4j password for the bundled graph-memory database (required;
+#    there is no insecure default). Compose reads it from .env:
+echo "NEO4J_PASSWORD=$(openssl rand -hex 24)" >> .env
+
+# 4. Start the application
 docker compose up -d --build
 ```
 

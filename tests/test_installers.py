@@ -150,10 +150,41 @@ def test_docker_compose_config_accepts_temp_env_file(tmp_path: Path) -> None:
         "AGENT_MODEL=moonshot/kimi-k2.6\nFAST_AGENT_MODEL=moonshot/kimi-k2.6\nSTRONG_AGENT_MODEL=moonshot/kimi-k2.6\n",
         encoding="utf-8",
     )
-    result = _run([docker, "compose", "config"], env={"AGENT_ENV_FILE": str(env_file)})
+    result = _run(
+        [docker, "compose", "config"],
+        env={"AGENT_ENV_FILE": str(env_file), "NEO4J_PASSWORD": "test-password"},
+    )
 
     assert "control_panel:" in result.stdout
     assert "5173" in result.stdout
+
+
+def test_docker_compose_config_requires_neo4j_password(tmp_path: Path) -> None:
+    docker = shutil.which("docker")
+    if not docker:
+        pytest.skip("docker is not available")
+    probe = subprocess.run([docker, "compose", "version"], capture_output=True)
+    if probe.returncode != 0:
+        pytest.skip("docker compose is not available")
+
+    env_file = tmp_path / "an-api.env"
+    env_file.write_text("AGENT_MODEL=moonshot/kimi-k2.6\n", encoding="utf-8")
+    # Point --env-file at an empty file so neither the shell env nor a local
+    # .env can supply NEO4J_PASSWORD.
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("", encoding="utf-8")
+    merged = {k: v for k, v in os.environ.items() if k != "NEO4J_PASSWORD"}
+    merged["AGENT_ENV_FILE"] = str(env_file)
+    result = subprocess.run(
+        [docker, "compose", "--env-file", str(empty_env), "config"],
+        cwd=PROJECT_ROOT,
+        env=merged,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "NEO4J_PASSWORD" in result.stderr
 
 
 def test_readme_empty_pc_commands_use_bootstrap() -> None:

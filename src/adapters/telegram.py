@@ -422,7 +422,17 @@ class TelegramAdapter:
         data = meta.json()
         if not data.get("ok"):
             raise RuntimeError(f"getFile failed: {data}")
-        file_path = data["result"]["file_path"]
+        file_path = str(data["result"]["file_path"])
+        # Reject traversal/absolute paths and URL metacharacters so the value
+        # can only ever select a file under the bot's own download namespace.
+        if (
+            file_path.startswith("/")
+            or ".." in file_path
+            or "?" in file_path
+            or "#" in file_path
+            or "://" in file_path
+        ):
+            raise RuntimeError(f"Unsafe file_path from getFile: {file_path!r}")
         download = await self._http.get(
             f"https://api.telegram.org/file/bot{self._token}/{file_path}",
             timeout=60.0,

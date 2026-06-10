@@ -312,11 +312,25 @@ if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
 Set-Content -Path $EnvFile -Value $out -Encoding UTF8
 Write-Host "Wrote $EnvFile"
 
+# docker-compose.yml requires NEO4J_PASSWORD (no insecure default). Compose
+# reads interpolation variables from .env, so generate a random one if absent.
+function Ensure-Neo4jPassword {
+    if ($env:NEO4J_PASSWORD) { return }
+    $composeEnv = Join-Path $RootDir ".env"
+    if ((Test-Path $composeEnv) -and (Select-String -Path $composeEnv -Pattern "^NEO4J_PASSWORD=" -Quiet)) { return }
+    $bytes = New-Object byte[] 24
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $pw = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+    Add-Content -Path $composeEnv -Value "NEO4J_PASSWORD=$pw" -Encoding UTF8
+    Write-Host "Generated NEO4J_PASSWORD in $composeEnv"
+}
+
 if (-not $NoStart) {
     if ($SandboxChoice -eq "on") {
         Push-Location $RootDir
         $env:INSTALL_ML = $UseHybrid
         $env:AGENT_USE_HYBRID_MEMORY = $UseHybrid
+        Ensure-Neo4jPassword
         try { docker compose up -d --build } finally { Pop-Location }
     }
     else {
