@@ -53,10 +53,21 @@ class SessionStore:
         self._fts = self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._path)
+        conn = sqlite3.connect(self._path, timeout=5.0)
+        # WAL (set once, persisted in the DB header) plus synchronous=NORMAL
+        # turns each per-turn write from a blocking fsync into a far cheaper
+        # append, and lets reads proceed concurrently with writes.
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
 
     def _init_schema(self) -> bool:
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self._connect() as c:
+                c.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.Error as exc:
+            logger.debug("session_store WAL enable failed: %s", exc)
         with self._connect() as c:
             existing = c.execute(
                 "SELECT sql FROM sqlite_master WHERE name = 'turns'"

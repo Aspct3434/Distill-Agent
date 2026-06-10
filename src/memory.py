@@ -66,7 +66,10 @@ class HybridMemory:
 
         try:
             self._neo4j = GraphDatabase.driver(
-                neo4j_uri, auth=(neo4j_user, neo4j_password)
+                neo4j_uri,
+                auth=(neo4j_user, neo4j_password),
+                connection_timeout=10,
+                connection_acquisition_timeout=15,
             )
             self._neo4j.verify_connectivity()
         except Exception:

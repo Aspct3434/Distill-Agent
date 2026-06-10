@@ -97,6 +97,12 @@ class _SQLiteLogStore(logging.Handler):
         self._capacity = max(1, capacity)
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
+        # The retention trim is a full-table scan+sort, so amortise it: run it
+        # once every _trim_interval inserts instead of on every log record. The
+        # table is allowed to drift up to one interval above capacity between
+        # trims, which is harmless for a bounded log buffer.
+        self._trim_interval = max(64, self._capacity // 20)
+        self._since_trim = 0
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -125,15 +131,18 @@ class _SQLiteLogStore(logging.Handler):
                         record.getMessage(),
                     ),
                 )
-                conn.execute(
-                    """
-                    DELETE FROM gateway_logs
-                    WHERE id NOT IN (
-                        SELECT id FROM gateway_logs ORDER BY id DESC LIMIT ?
+                self._since_trim += 1
+                if self._since_trim >= self._trim_interval:
+                    conn.execute(
+                        """
+                        DELETE FROM gateway_logs
+                        WHERE id NOT IN (
+                            SELECT id FROM gateway_logs ORDER BY id DESC LIMIT ?
+                        )
+                        """,
+                        (self._capacity,),
                     )
-                    """,
-                    (self._capacity,),
-                )
+                    self._since_trim = 0
                 conn.commit()
         except Exception:
             pass
@@ -561,7 +570,11 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Docker sandbox mode disabled — running commands on host")
 
-    tools = ToolManager()
+    # ToolManager.__init__ eagerly starts the Docker sandbox (a `docker run`
+    # plus a multi-second `subprocess.run` to snapshot the environment). Run it
+    # in a worker thread so it doesn't block the event loop — and therefore the
+    # health endpoint and shutdown signals — during startup.
+    tools = await asyncio.to_thread(ToolManager)
     # A missing/broken optional MCP server must never take down the whole
     # gateway — otherwise the UI just shows "disconnected". Each connect is
     # isolated so the API still comes up (in a degraded mode) on failure.
