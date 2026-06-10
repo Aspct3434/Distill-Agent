@@ -229,132 +229,8 @@ def _compact_evidence_items(
     return compacted
 
 
-_IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-
-
 def _normalized_user_text(text: str) -> str:
     return " ".join(text.strip().lower().split())
-
-
-def _is_simple_environment_request(text: str) -> bool:
-    normalized = _normalized_user_text(text).strip(" ?!.")
-    if not normalized:
-        return False
-    if re.search(r"\b(env\s*var|environment variables?|dotenv)\b", normalized) or ".env" in normalized:
-        return False
-
-    tokens = set(re.findall(r"[a-z0-9]+", normalized))
-    if tokens & {"ip", "ipv4", "ipv6", "public", "url", "port", "website", "serve"}:
-        return False
-    environment_subject = bool(
-        tokens
-        & {
-            "environment",
-            "runtime",
-            "runtimes",
-            "machine",
-            "system",
-            "platform",
-            "host",
-            "os",
-        }
-    )
-    runtime_context = bool(
-        tokens
-        & {
-            "info",
-            "status",
-            "report",
-            "details",
-            "available",
-            "installed",
-            "execution",
-            "shell",
-            "tools",
-            "runtimes",
-        }
-    )
-    request_intent = bool(
-        tokens
-        & {
-            "check",
-            "show",
-            "inspect",
-            "report",
-            "list",
-            "describe",
-            "summarize",
-            "status",
-            "what",
-            "which",
-        }
-    ) or normalized.startswith(("tell me", "give me"))
-    bare_subject = tokens <= {
-        "environment",
-        "runtime",
-        "runtimes",
-        "machine",
-        "system",
-        "platform",
-        "host",
-        "os",
-        "info",
-        "status",
-        "report",
-        "execution",
-    }
-    return environment_subject and (request_intent or runtime_context or bare_subject)
-
-
-def _is_public_ipv4_request(text: str) -> bool:
-    normalized = _normalized_user_text(text)
-    return (
-        "public" in normalized
-        and ("ipv4" in normalized or "ip address" in normalized or normalized.endswith(" ip"))
-        and not any(token in normalized for token in ("host on", "serve on", "website"))
-    )
-
-
-def _is_current_cwd_request(text: str) -> bool:
-    normalized = _normalized_user_text(text).strip(" ?!.")
-    return normalized in {
-        "pwd",
-        "cwd",
-        "current directory",
-        "current working directory",
-        "where am i",
-        "what directory are you in",
-    }
-
-
-def _extract_simple_port_status_request(text: str) -> int | None:
-    normalized = _normalized_user_text(text)
-    match = re.search(r"\bport\s+(\d{1,5})\b", normalized)
-    if not match:
-        return None
-    if not any(
-        phrase in normalized
-        for phrase in (
-            "check port",
-            "port status",
-            "is port",
-            "what is on port",
-            "anything running on port",
-            "listening on port",
-            "open on port",
-        )
-    ):
-        return None
-    port = int(match.group(1))
-    return port if 1 <= port <= 65535 else None
-
-
-def _is_last_url_request(text: str) -> bool:
-    normalized = _normalized_user_text(text)
-    return (
-        any(token in normalized for token in ("url", "link"))
-        and any(token in normalized for token in ("give", "send", "show", "last", "again", "where"))
-    )
 
 
 def _profile_update_signal(text: str) -> bool:
@@ -797,7 +673,7 @@ _PARALLEL_SAFE_TOOLS: frozenset[str] = frozenset(
     {
         "get_system_environment",
         "get_filesystem_process_evidence",
-        # Web tools are read-only network calls â€" safe to run concurrently
+        # Web tools are read-only network calls — safe to run concurrently
         "web_fetch",
         "web_search",
         "expand_tool_output",
@@ -937,7 +813,7 @@ SYSTEM_DIRECTIVE = (
     "general files, start services, expose ports, install software, or otherwise "
     "change host state when the user has asked for a concrete task or agreed to a "
     "proposed action. "
-    # â”€â”€ Task contract â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Task contract ────────────────────────────────────────────────────────
     "For every new user task, your FIRST tool call is set_task_contract. Use it to "
     "declare whether the task is a pure text answer or requires real host-side "
     "execution evidence. For any execute-mode task that needs more than one step, "
@@ -947,16 +823,16 @@ SYSTEM_DIRECTIVE = (
     "the plan in sync with what has actually happened, use it to avoid repeating "
     "steps that are already done, and do not give a final answer until every step "
     "is 'done' or 'failed'. "
-    # â”€â”€ Web tools â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Web tools ────────────────────────────────────────────────────────────
     "You have two web tools that make you general-purpose without custom skills: "
     "web_search and web_fetch. Use them freely. "
     "web_search: find information, look up docs, research a topic, locate solutions "
     "to errors. Returns titles + URLs + snippets. "
-    "web_fetch: read any URL â€” documentation, GitHub files, API endpoints, search "
+    "web_fetch: read any URL — documentation, GitHub files, API endpoints, search "
     "results, news, technical specs. Returns clean readable text. "
     "Standard research pattern: web_search to find candidate URLs, then web_fetch "
     "the most relevant ones to read the full content, then synthesise your answer. "
-    "NEVER write a custom skill just to do web research â€” use these tools directly. "
+    "NEVER write a custom skill just to do web research — use these tools directly. "
     "When you encounter an error (build failure, missing dependency, unfamiliar API), "
     "read the tool result, identify the root cause, and web_search the exact error "
     "message before assuming you need a custom workaround. A failed tool call is "
@@ -967,7 +843,7 @@ SYSTEM_DIRECTIVE = (
     "constraints, and keep working. Only report a blocker after tool evidence shows "
     "there is no viable route; then name the exact blocker, the evidence, and the "
     "next practical option. "
-    # â”€â”€ Terminal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Terminal ─────────────────────────────────────────────────────────────
     "You have root access to a terminal shell tool. If the user requests an "
     "installation, setup, or file-system operation, DO NOT explain how the user "
     "can do it manually. Immediately use execute_terminal_command or "
@@ -1014,7 +890,7 @@ SYSTEM_DIRECTIVE = (
     "never repeat a step already listed under Completed_Actions in the executive "
     "summary; build on finished work and respect ordering (do not start a service "
     "before its prerequisites are installed and in place). "
-    # â”€â”€ Check tooling once; never assume, never repeat-probe â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Check tooling once; never assume, never repeat-probe ──────────────────
     "Tooling availability is environment-specific, so it is NEVER safe to assume a "
     "runtime exists. Call get_system_environment ONCE and read its 'runtimes' block "
     "to learn what is actually on PATH (node, npm, npx, python, rustc, cargo, ...). "
@@ -1025,7 +901,7 @@ SYSTEM_DIRECTIVE = (
     "will only fail). If a runtime is genuinely absent and you cannot install it, do "
     "NOT keep retrying the same command -- switch to an approach that does not need "
     "it (for a website, that means plain HTML/CSS/JS, which needs no toolchain). "
-    # â”€â”€ Honor the requested technology (no silent substitution) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Honor the requested technology (no silent substitution) ───────────────
     "When the user names a specific framework, language, library, or tool (for "
     "example 'using React', 'in Rust', 'with Next.js', 'a Flask API'), you MUST "
     "deliver exactly that. NEVER silently substitute a different stack -- e.g. do "
@@ -1036,11 +912,11 @@ SYSTEM_DIRECTIVE = (
     "truly unavailable and cannot be installed, say so explicitly in your answer "
     "rather than quietly shipping a different deliverable and claiming the task is "
     "done. "
-    # â”€â”€ Content generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Content generation ───────────────────────────────────────────────────
     "When asked to produce content (a website, a document, sample data, copy), "
     "generate complete, realistic content yourself -- do NOT ask the user what to "
     "include or leave placeholder text unless they explicitly request a skeleton. "
-    # â”€â”€ Choosing a web stack: simplest that works (DEFAULT to vanilla HTML) â”€â”€â”€
+    # ── Choosing a web stack: simplest that works (DEFAULT to vanilla HTML) ───
     "Choosing how to build a website: pick the SIMPLEST approach that satisfies the "
     "request. If the user asks for 'a website', 'a web page', 'an interactive "
     "website', a landing page, or an info/marketing page WITHOUT naming a framework, "
@@ -1055,7 +931,7 @@ SYSTEM_DIRECTIVE = (
     "confirm node/npm exist via get_system_environment, then follow the build recipe "
     "below. Do NOT default to a heavy toolchain the user did not ask for, and do not "
     "scaffold a React/Vite project for a request that never mentioned React. "
-    # â”€â”€ Website quality bar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Website quality bar ──────────────────────────────────────────────────
     "CRITICAL QUALITY RULE for every website you create: a bare skeleton with "
     "unstyled HTML tags is NEVER acceptable. Every website deliverable MUST have: "
     "(1) a complete CSS design with a colour palette, typography (font-family, "
@@ -1065,8 +941,8 @@ SYSTEM_DIRECTIVE = (
     "background colours/gradients, border-radius, box-shadow, hover/transition "
     "effects, and a cohesive visual hierarchy; (4) at minimum 100+ words of visible "
     "content. Think of the output as a page you would show a client, not a code "
-    "snippet. Generate ALL content yourself â€” do not leave blank sections or TODOs. "
-    "If the file is getting large, that is FINE â€” write the complete content in a "
+    "snippet. Generate ALL content yourself — do not leave blank sections or TODOs. "
+    "If the file is getting large, that is FINE — write the complete content in a "
     "single write_text_file call. The tool supports large content payloads. "
     "If the user asks to host, serve, serve, or get a browser URL for a static "
     "website, start a normal HTTP server in the active workspace with "
@@ -1080,7 +956,7 @@ SYSTEM_DIRECTIVE = (
     "For static sites, serve a directory that contains index.html at its root; "
     "if you expose a specific HTML file, return that exact file URL. Never claim "
     "a site is ready when the root URL is a directory listing. "
-    # â”€â”€ React / Vite / SPA build-and-serve recipe (only when requested) â”€â”€â”€â”€â”€
+    # ── React / Vite / SPA build-and-serve recipe (only when requested) ─────
     "When the user EXPLICITLY asked for React/Vue/Svelte/Vite/Next (otherwise use "
     "the vanilla single-file approach above): such a single-page app is NOT a static "
     "site until it is BUILT, and it needs node/npm. Follow this exact sequence: "
@@ -1124,7 +1000,7 @@ SYSTEM_DIRECTIVE = (
     "execute_background_service for work that should repeat on a schedule. "
     "After calling schedule_task, always call list_scheduled_tasks to confirm the "
     "job was registered and show the user its job_id and next-run time. "
-    # â”€â”€ Output format â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    # ── Output format ────────────────────────────────────────────────────────
     "Final answers must use clear GitHub-flavored Markdown. Use bold section labels "
     "and concise bullets when helpful. Include one to three relevant emoji characters "
     "in user-facing status summaries, but keep the tone professional and do not "
@@ -1480,17 +1356,8 @@ class AgentEngine:
         # and tool turns it produces persist into the next turn automatically.
         messages.append({"role": message.role, "content": message.content})
         self._session_steps[message.session_id] = []
-        ledger = self._artifact_ledger(message.session_id)
-        ledger.begin_turn()
+        self._artifact_ledger(message.session_id).begin_turn()
         self._record_turn(message.session_id, "user", message.content)
-
-        if message.role == "user":
-            fast_response = await self._try_fast_path_response(message.content, ledger)
-            if fast_response is not None:
-                messages.append({"role": "assistant", "content": fast_response})
-                self._record_turn(message.session_id, "assistant", fast_response)
-                yield {"type": "text", "content": fast_response}
-                return
 
         if all_tools is None:
             all_tools = await self._tools.list_all_tools()
@@ -2120,7 +1987,7 @@ class AgentEngine:
                 # Disable parallel tool calls during contract-enforced iterations.
                 # When the contract gate narrows tools to a single option (e.g.
                 # only update_plan is allowed), the model sometimes emits two calls
-                # to the same tool in one turn â€” the second call overwrites the
+                # to the same tool in one turn — the second call overwrites the
                 # first (collapsing a 3-step plan to 1 step) before any result is
                 # seen. Forcing sequential calls (one per turn) eliminates this.
                 if must_set_contract or needs_execution:
@@ -2372,7 +2239,7 @@ class AgentEngine:
                         "Escalating to strong model %s for session %s after repeated errors",
                         active_model, session_id,
                     )
-                    yield {"type": "status", "message": f"Escalating to {active_model}â€¦"}
+                    yield {"type": "status", "message": f"Escalating to {active_model}…"}
 
                 if needs_execution and progress_before is not None:
                     progress_status = self._completion_status_with_task_graph(
@@ -2949,7 +2816,7 @@ class AgentEngine:
             except Exception as exc:
                 logger.warning("web_search raised: %s", exc)
                 return f"[web_search error] {exc}", True, "__builtin__"
-        # Browser tools â€” stateful, run serially (not in _PARALLEL_SAFE_TOOLS)
+        # Browser tools — stateful, run serially (not in _PARALLEL_SAFE_TOOLS)
         if tool_name == "browser_navigate":
             try:
                 return await self._tools.browser_navigate(**arguments), False, "__builtin__"
@@ -3148,80 +3015,6 @@ class AgentEngine:
             "role": "system",
             "content": f"User context: {ctx}",
         }
-
-    async def _try_fast_path_response(
-        self,
-        user_text: str,
-        ledger: ArtifactLedger,
-    ) -> str | None:
-        """Answer cheap read-only requests without entering the ReAct/LLM loop."""
-        if _is_simple_environment_request(user_text):
-            getter = getattr(self._tools, "get_system_environment", None)
-            if callable(getter):
-                return _format_system_environment_report(getter())
-            return "System environment is unavailable from this tool manager."
-
-        if _is_current_cwd_request(user_text):
-            cwd = getattr(self._tools, "current_cwd", None) or os.getcwd()
-            return f"Current working directory: `{cwd}`"
-
-        if _is_last_url_request(user_text):
-            url = ledger.latest("Service URL")
-            if url:
-                return f"Last service URL: {url}"
-
-        port = _extract_simple_port_status_request(user_text)
-        if port is not None:
-            return self._fast_port_status(port)
-
-        if _is_public_ipv4_request(user_text):
-            return await self._fast_public_ipv4()
-
-        return None
-
-    def _fast_port_status(self, port: int) -> str:
-        getter = getattr(self._tools, "get_filesystem_process_evidence", None)
-        if not callable(getter):
-            return f"Port {port}: status unavailable; process evidence tool is not configured."
-        try:
-            raw = getter(ports=[port], include_background_log=False)
-            data = json.loads(raw) if isinstance(raw, str) else raw
-        except Exception as exc:
-            return f"Port {port}: status unavailable ({exc})."
-        ports = data.get("ports") if isinstance(data, dict) else None
-        entry = ports[0] if isinstance(ports, list) and ports else {}
-        if not isinstance(entry, dict):
-            return f"Port {port}: no listener detected."
-        if entry.get("connectable"):
-            process = entry.get("process") or entry.get("pid") or "unknown process"
-            return f"Port {port}: open on 127.0.0.1 ({process})."
-        reason = entry.get("error") or "no listener detected"
-        return f"Port {port}: closed or unreachable on 127.0.0.1 ({reason})."
-
-    async def _fast_public_ipv4(self) -> str:
-        runner = getattr(self._tools, "execute_terminal_command", None)
-        if not callable(runner):
-            return "Public IPv4 lookup is unavailable; terminal execution is not configured."
-        command = (
-            "curl -4 -s --max-time 8 https://api.ipify.org || "
-            "curl -4 -s --max-time 8 https://icanhazip.com || "
-            "curl -4 -s --max-time 8 https://checkip.amazonaws.com"
-        )
-        try:
-            result = await runner(command)
-        except Exception as exc:
-            return f"Public IPv4 lookup failed: {exc}"
-        stdout = str((result or {}).get("stdout") or "").strip()
-        stderr = str((result or {}).get("stderr") or "").strip()
-        match = _IPV4_RE.search(stdout)
-        if not match:
-            detail = stderr or stdout or "no address returned"
-            return f"Public IPv4 lookup failed: {detail}"
-        return (
-            f"Public IPv4: {match.group(0)}\n\n"
-            "This identifies the outbound network address only. It does not prove "
-            "that any local port is reachable from the public internet."
-        )
 
     async def _schedule_task(
         self,
@@ -4066,7 +3859,7 @@ def _summarize_host_environment(
     elif sandbox_failed:
         sandbox_line = (
             "SANDBOX: FAILED TO START (Docker Desktop is not running or unreachable). "
-            "All commands execute DIRECTLY on the host OS below â€” treat it as a plain "
+            "All commands execute DIRECTLY on the host OS below — treat it as a plain "
             "host session; do NOT assume a Linux container environment.\n"
         )
     else:
@@ -4086,56 +3879,6 @@ def _summarize_host_environment(
         "is already on PATH, just use it directly. These facts are stated here, so do "
         "NOT re-probe them with repeated which/where/--version commands.\n"
         "===================================================================="
-    )
-
-
-def _dict_section(data: dict[str, Any], key: str) -> dict[str, Any]:
-    value = data.get(key)
-    return value if isinstance(value, dict) else {}
-
-
-def _format_system_environment_report(raw: str) -> str:
-    try:
-        data = json.loads(raw) if raw else {}
-    except (TypeError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict) or not data:
-        return "System environment is unavailable from the active tool environment."
-
-    shell = _dict_section(data, "shell")
-    user = _dict_section(data, "user")
-    disk = _dict_section(data, "disk_cwd")
-    runtimes = _dict_section(data, "runtimes")
-    sandbox = _dict_section(data, "sandbox")
-
-    available = sorted(name for name, present in runtimes.items() if present)
-    unavailable = sorted(name for name, present in runtimes.items() if not present)
-    sandbox_mode = sandbox.get("mode") if sandbox else "off"
-    sandbox_detail = (
-        f"{sandbox_mode}"
-        + (f" at {sandbox.get('container_workdir')}" if sandbox.get("container_workdir") else "")
-        if sandbox
-        else "off (commands run directly in the host environment)"
-    )
-    disk_bits = []
-    for label, key in (("total", "total_gb"), ("used", "used_gb"), ("free", "free_gb")):
-        if key in disk:
-            disk_bits.append(f"{label} {disk[key]} GB")
-
-    return "\n".join(
-        [
-            "**System Environment Report**",
-            f"- OS: {data.get('os', 'unknown')} {data.get('os_version', '')}".rstrip(),
-            f"- Machine: {data.get('machine', 'unknown')}",
-            f"- Shell: {shell.get('shell', 'unknown')} ({'POSIX' if shell.get('posix') else 'non-POSIX'})",
-            f"- Sandbox: {sandbox_detail}",
-            f"- User: {user.get('username', 'unknown')} "
-            f"({'root' if user.get('is_root') else 'non-root'}; "
-            f"sudo {'available' if user.get('sudo_available') else 'unavailable'})",
-            f"- Disk: {', '.join(disk_bits) if disk_bits else 'unavailable'}",
-            f"- Runtimes available: {', '.join(available) or 'none detected'}",
-            f"- Runtimes unavailable: {', '.join(unavailable[:12]) or 'none detected'}",
-        ]
     )
 
 

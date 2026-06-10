@@ -8,7 +8,7 @@ that the framework rejected *silently*, trapping it:
   * step objects keyed "step" not "title", with status "waiting" (not canonical)
 
 Because those update_plan calls errored, the plan never closed, so the contract's
-`plan_open_steps` requirement could never clear â€” the task could never complete
+`plan_open_steps` requirement could never clear — the task could never complete
 even if the build had succeeded. These tests lock in tolerant coercion plus the
 build-and-serve directive that tells the agent to build before serving.
 """
@@ -68,7 +68,7 @@ class TestNormalisePlanStatus:
 
 
 # ---------------------------------------------------------------------------
-# Plan step coercion â€” title aliases and JSON-string inputs
+# Plan step coercion — title aliases and JSON-string inputs
 # ---------------------------------------------------------------------------
 
 
@@ -106,7 +106,7 @@ class TestCoercePlanSteps:
 
 
 # ---------------------------------------------------------------------------
-# _plan_steps_from_args â€” "plan" alias for "steps"
+# _plan_steps_from_args — "plan" alias for "steps"
 # ---------------------------------------------------------------------------
 
 
@@ -129,7 +129,7 @@ class TestPlanStepsFromArgs:
 
 
 # ---------------------------------------------------------------------------
-# _run_update_plan â€” the transcript's malformed call must now succeed
+# _run_update_plan — the transcript's malformed call must now succeed
 # ---------------------------------------------------------------------------
 
 
@@ -280,7 +280,7 @@ class TestNormaliseContractStringCriteria:
 
 
 # ---------------------------------------------------------------------------
-# parallel_tool_calls=False guard â€” prevents double update_plan in one turn
+# parallel_tool_calls=False guard — prevents double update_plan in one turn
 # ---------------------------------------------------------------------------
 
 
@@ -308,7 +308,7 @@ class TestParallelToolCallsDisabledForContractExecution:
 
     def test_update_plan_response_discourages_another_call(self):
         """update_plan's response must tell the model not to call it again
-        in the same turn when there are still open steps â€” belt-and-braces
+        in the same turn when there are still open steps — belt-and-braces
         defence even though parallel_tool_calls=False is the primary guard."""
         result, is_error = _run_update_plan(
             {"steps": [{"title": "Build HTML", "status": "pending"}]}
@@ -319,7 +319,7 @@ class TestParallelToolCallsDisabledForContractExecution:
     def test_second_update_plan_collapse_is_still_coerced(self):
         """Even when two update_plan calls occur (e.g. on older models that
         ignore parallel_tool_calls), _latest_plan must return the second one
-        (the 1-step plan), not None â€” so the iteration can continue rather
+        (the 1-step plan), not None — so the iteration can continue rather
         than re-asking for a plan from scratch."""
         import json
 
@@ -345,7 +345,7 @@ class TestParallelToolCallsDisabledForContractExecution:
                 ],
             },
             {"role": "tool", "tool_call_id": "c1", "content": "ok"},
-            # Two update_plan calls in one turn â€” the collapse pattern
+            # Two update_plan calls in one turn — the collapse pattern
             {
                 "role": "assistant",
                 "tool_calls": [
@@ -384,7 +384,7 @@ class TestParallelToolCallsDisabledForContractExecution:
         assert len(plan) == 1
         assert plan[0]["title"] == "Write HTML"
         assert plan[0]["status"] == "in_progress"
-        # Plan is still open â€” next iteration must proceed to write_text_file
+        # Plan is still open — next iteration must proceed to write_text_file
         assert _plan_has_open_steps(messages)
 
 

@@ -19,6 +19,10 @@ Usage::
     # validate the harness itself with a deterministic mock model (no API key)
     python src/eval_harness.py --self-test
 
+    # measure the project's core claim: run the suite twice (contract gating
+    # on, then off) and compare false-completion rates (needs an API key)
+    python src/eval_harness.py --benchmark-gating --out gating.json
+
 Metrics are captured non-invasively by wrapping ``litellm.acompletion`` for the
 duration of a run, so the agent code under test is unmodified.
 """
@@ -28,6 +32,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import shutil
 import statistics
 import sys
 import time
@@ -87,6 +92,21 @@ class EvalTask:
     prompt: str
     check: Callable[[EvalResult], bool]
     tags: list[str] = field(default_factory=list)
+    # Paths the task is expected to create. Removed before a benchmark run so
+    # a stale artifact from a previous run/arm can never satisfy the check.
+    artifacts: list[str] = field(default_factory=list)
+
+
+def false_completion(result: EvalResult) -> bool:
+    """True when the agent delivered a confident final answer that is wrong.
+
+    ``outcome == "completed"`` means the run ended with a normal final answer
+    (not an exception, rate limit, or iteration cap). If the deterministic
+    check failed anyway, the agent claimed work it did not do -- the exact
+    failure mode contract gating exists to prevent. Honest failures (the run
+    gave up or crashed) are not false completions.
+    """
+    return result.outcome == "completed" and bool(result.final_text) and not result.passed
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +323,7 @@ LIVE_TASKS: list[EvalTask] = [
         ),
         check=_check_file("/tmp/eval_hello.txt", "HELLO_EVAL"),
         tags=["action", "filesystem"],
+        artifacts=["/tmp/eval_hello.txt"],
     ),
     EvalTask(
         id="static_site",
@@ -312,6 +333,7 @@ LIVE_TASKS: list[EvalTask] = [
         ),
         check=_check_file("/tmp/eval-cats/index.html"),
         tags=["action", "website"],
+        artifacts=["/tmp/eval-cats"],
     ),
     # Regression: the agent previously stalled after update_plan without calling
     # write_text_file when the user asked for an "interactive website" without
@@ -321,8 +343,21 @@ LIVE_TASKS: list[EvalTask] = [
         prompt="Create an interactive website about the importance of sleep.",
         check=_check_file("/workspace/index.html"),
         tags=["action", "website", "regression"],
+        artifacts=["/workspace/index.html"],
     ),
 ]
+
+
+def _remove_artifacts(paths: list[str]) -> None:
+    for raw in paths:
+        path = Path(raw)
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
+        except OSError:
+            pass  # best effort; the check still reports ground truth
 
 
 class _EmptyMemory:
@@ -333,7 +368,7 @@ class _EmptyMemory:
         return ""
 
 
-async def _build_live_engine() -> tuple[AgentEngine, Any]:
+async def _build_live_engine(*, require_task_contract: bool = True) -> tuple[AgentEngine, Any]:
     import os
 
     from tools import ToolManager
@@ -347,8 +382,72 @@ async def _build_live_engine() -> tuple[AgentEngine, Any]:
         model=model,
         fast_model=os.getenv("FAST_AGENT_MODEL", model),
         strong_model=os.getenv("STRONG_AGENT_MODEL", model),
+        require_task_contract=require_task_contract,
     )
     return engine, tools
+
+
+def format_gating_comparison(
+    gating_on: list[EvalResult], gating_off: list[EvalResult]
+) -> str:
+    """Two-arm summary of the core claim: gating reduces false completions."""
+    lines = ["\nGating benchmark (evidence gate ON vs OFF):"]
+    for label, results in (("gating ON ", gating_on), ("gating OFF", gating_off)):
+        total = len(results) or 1
+        passed = sum(1 for r in results if r.passed)
+        claimed_wrong = sum(1 for r in results if false_completion(r))
+        lines.append(
+            f"  {label}  verified pass {passed}/{len(results)} "
+            f"({100 * passed / total:.0f}%)  |  false completions "
+            f"{claimed_wrong}/{len(results)} ({100 * claimed_wrong / total:.0f}%)"
+        )
+    lines.append(
+        "  (false completion = confident final answer whose deterministic check failed)"
+    )
+    return "\n".join(lines)
+
+
+async def _run_gating_arm(
+    label: str, *, require_task_contract: bool, tasks: list[EvalTask]
+) -> list[EvalResult]:
+    """Run *tasks* on a fresh engine + tool manager so arms share no state."""
+    engine, tools = await _build_live_engine(require_task_contract=require_task_contract)
+    results: list[EvalResult] = []
+    try:
+        for task in tasks:
+            _remove_artifacts(task.artifacts)
+            results.append(
+                await run_task(engine, task, session_id=f"eval-{label}-{task.id}")
+            )
+    finally:
+        if hasattr(tools, "close"):
+            await tools.close()
+    return results
+
+
+async def _main_benchmark_gating(args: argparse.Namespace) -> int:
+    gating_on = await _run_gating_arm("on", require_task_contract=True, tasks=LIVE_TASKS)
+    gating_off = await _run_gating_arm("off", require_task_contract=False, tasks=LIVE_TASKS)
+
+    print("== Arm 1: contract gating ON ==")
+    print(format_table(gating_on))
+    print("\n== Arm 2: contract gating OFF ==")
+    print(format_table(gating_off))
+    print(format_gating_comparison(gating_on, gating_off))
+
+    if args.out:
+        Path(args.out).write_text(
+            json.dumps(
+                {
+                    "gating_on": [r.to_record() for r in gating_on],
+                    "gating_off": [r.to_record() for r in gating_off],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"\nWrote {args.out}")
+    return 0
 
 
 async def _main_live(args: argparse.Namespace) -> int:
@@ -442,6 +541,17 @@ def run_self_test() -> int:
         "prompt_tokens==20": result.prompt_tokens == 20,
         "completion_tokens==10": result.completion_tokens == 10,
         "json_record": "events" not in result.to_record(),
+        # False-completion classifier (drives --benchmark-gating): only a
+        # confident-but-wrong final answer counts; honest failures do not.
+        "false_completion_claimed_wrong": false_completion(
+            EvalResult(task_id="t", passed=False, outcome="completed", final_text="done")
+        ),
+        "false_completion_not_for_pass": not false_completion(
+            EvalResult(task_id="t", passed=True, outcome="completed", final_text="done")
+        ),
+        "false_completion_not_for_honest_failure": not false_completion(
+            EvalResult(task_id="t", passed=False, outcome="iteration_limit", final_text="gave up")
+        ),
     }
     failed = [name for name, ok in checks.items() if not ok]
     if failed:
@@ -454,12 +564,19 @@ def run_self_test() -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Agent evaluation harness")
     parser.add_argument("--self-test", action="store_true", help="Run the harness against a mock model (no API key).")
+    parser.add_argument(
+        "--benchmark-gating",
+        action="store_true",
+        help="Run the live suite twice (contract gating on, then off) and report false-completion rates per arm. Needs an API key.",
+    )
     parser.add_argument("--out", help="Write results JSON to this path.")
     parser.add_argument("--baseline", help="Compare against a previously written results JSON.")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_test()
+    if args.benchmark_gating:
+        return asyncio.run(_main_benchmark_gating(args))
     return asyncio.run(_main_live(args))
 
 

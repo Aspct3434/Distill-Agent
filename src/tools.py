@@ -2855,7 +2855,7 @@ class ToolManager:
         shell would have landed.
 
         Keys in the returned dict:
-          exit_code                 -- integer return code (âˆ'1 on timeout/unknown)
+          exit_code                 -- integer return code (-1 on timeout/unknown)
           stdout                    -- decoded stdout (SYSTEM ALERT prepended when
                                       exit_code > 0)
           stderr                    -- decoded stderr
@@ -2894,7 +2894,7 @@ class ToolManager:
         if mismatch_reason:
             return self._wrong_environment_blocked_result(command, mismatch_reason)
 
-        # â"€â"€ Step 1: intercept a leading `cd <path>` â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+        # ── Step 1: intercept a leading `cd <path>` ──────────────────────────
         cd_match = _LEADING_CD_RE.match(command)
         if cd_match:
             raw = next(g for g in cd_match.groups() if g is not None)
@@ -2916,7 +2916,7 @@ class ToolManager:
                 }
             command = rest  # run only what follows the cd
 
-        # â"€â"€ Step 2: run the (possibly trimmed) command in current_cwd â"€â"€â"€â"€â"€â"€â"€â"€
+        # ── Step 2: run the (possibly trimmed) command in current_cwd ────────
         cwd_snapshot = self.current_cwd
 
         if self._sandbox is not None:
@@ -3029,7 +3029,7 @@ class ToolManager:
             "scope": "docker_sandbox" if self._sandbox is not None else "host",
         }
 
-        # â"€â"€ Step 3: track any embedded cd calls (e.g. mkdir /x && cd /x) â"€â"€â"€â"€
+        # ── Step 3: track any embedded cd calls (e.g. mkdir /x && cd /x) ────
         if result["exit_code"] == 0:
             if self._sandbox is not None:
                 new_cwd = _resolve_sandbox_cd(command, cwd_snapshot)
@@ -3414,7 +3414,7 @@ def _resolve_cd_target(command: str, current_cwd: str) -> str | None:
 
     Returns ``None`` when no ``cd`` is found, when the target is ``-`` (which
     requires shell history the process doesn't have), or when path resolution
-    fails.  Tilde expansion is handled for ``~`` and ``~/â€¦`` forms.
+    fails.  Tilde expansion is handled for ``~`` and ``~/…`` forms.
     """
     # Bare `cd` with no argument navigates to the home directory.
     bare_cd = re.search(r'(?:^|[;&|])\s*cd\s*(?:[;&|]|$)', command, re.MULTILINE)

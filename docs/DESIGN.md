@@ -179,9 +179,11 @@ An honest priority order, most expendable first:
 ## 10. Known gaps
 
 - The core claim — that contract gating reduces false completions — has no
-  published benchmark yet. `src/eval_harness.py` exists for exactly this;
-  running it across a task suite with gating on/off is the highest-leverage
-  missing piece of evidence.
+  published benchmark yet. The harness can now measure it directly
+  (`python src/eval_harness.py --benchmark-gating` runs the suite with the
+  gate on and off and reports false-completion rates per arm); publishing
+  results across a broader task suite is the highest-leverage missing piece
+  of evidence.
 - The HTTP sandbox shim is less exercised than the host and Docker paths
   (tested against mocks, not live providers).
 - Session lanes have no eviction policy for long-idle sessions.

@@ -26,9 +26,13 @@ jobs:
           cache: pip
 
       - name: Install dependencies
+        # Install the SAME pinned set that deployments use (requirements.txt)
+        # plus the pinned dev toolchain, so CI cannot silently drift from what
+        # ships: a green build means the pins work, and a new upstream release
+        # cannot break CI without a pin change in the diff.
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi mcp-server-sqlite aiosqlite httpx litellm pydantic pytest pytest-asyncio pytest-cov hypothesis duckduckgo-search playwright
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Install Playwright Chromium browser
         run: playwright install chromium --with-deps
@@ -86,7 +90,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install ruff
+      - run: pip install -r requirements-dev.txt
       - name: Ruff check
         run: ruff check src/ tests/ --output-format=github
 
@@ -99,9 +103,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install mypy fastapi pydantic litellm mcp aiosqlite httpx rich
+      - run: pip install -r requirements.txt -r requirements-dev.txt
       - name: mypy
-        # Hard gate over the whole src/ tree. ignore_missing_imports (set in
-        # pyproject) treats uninstalled heavy deps (chromadb, neo4j, torch,
-        # playwright) as Any, so they don't need to be installed in CI.
+        # Hard gate over the whole src/ tree against the pinned runtime set.
+        # ignore_missing_imports (set in pyproject) treats the uninstalled
+        # heavy ML deps (chromadb, neo4j, torch) as Any.
         run: mypy src/

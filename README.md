@@ -281,6 +281,14 @@ pytest                        # Run the full suite
 pytest tests/test_task_contract_loop.py -v   # Test the anti-hallucination contract system
 ```
 
+To measure the contract system's effect directly, the eval harness can run its
+live suite with evidence gating on and off and report the false-completion
+rate (confident final answers whose deterministic check failed) per arm:
+
+```bash
+python src/eval_harness.py --benchmark-gating --out gating.json   # needs an API key
+```
+
 ## License
 
 Distill is released under the [MIT License](LICENSE).

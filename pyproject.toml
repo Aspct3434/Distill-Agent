@@ -1,13 +1,73 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "distill-agent"
-version = "0.1.0"
+# Keep in lockstep with the npm installer package version (package.json).
+version = "0.2.6"
 description = "Self-hosted ReAct agent with task-contract execution, MCP tool integration, and skill distillation"
 requires-python = ">=3.11"
 readme = "README.md"
+license = "MIT"
+# Direct imports of src/ only. requirements.txt remains the fully pinned
+# deployment set; floors here track the pins current at declaration time.
+dependencies = [
+    "aiosqlite>=0.21",
+    "duckduckgo-search>=8.1",
+    "fastapi>=0.136",
+    "httpx>=0.28",
+    "litellm>=1.83",
+    "mcp>=1.27",
+    # Not imported: spawned as a subprocess MCP server by gateway.py.
+    "mcp-server-sqlite>=2025.4.25",
+    "playwright>=1.60",
+    "pydantic>=2.12",
+    "python-dotenv>=1.0",
+    "PyYAML>=6.0",
+    "rich>=15.0",
+    "uvicorn>=0.47",
+    "websockets>=16.0",
+]
+
+[project.optional-dependencies]
+# Hybrid-memory backends (ChromaDB + Neo4j + sentence-transformers). See
+# requirements-ml.txt for the pinned set and the CPU-wheel torch index.
+ml = [
+    "chromadb>=1.5",
+    "neo4j>=6.2",
+    "sentence-transformers>=5.5",
+]
+
+[tool.setuptools]
+# Flat module layout under src/: the modules import each other as top-level
+# names, so they are listed explicitly to keep the wheel build deterministic.
+package-dir = {"" = "src"}
+py-modules = [
+    "agent",
+    "approvals",
+    "artifacts",
+    "checkpointer",
+    "contract",
+    "eval_harness",
+    "evaluator",
+    "evolution",
+    "gateway",
+    "llm_utils",
+    "memory",
+    "persona",
+    "planning",
+    "proxy_auth",
+    "scheduler",
+    "session_store",
+    "skill_standard",
+    "sqlite_migrations",
+    "task_graph",
+    "tools",
+    "toolsets",
+    "tui",
+]
+packages = ["adapters", "auth"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
