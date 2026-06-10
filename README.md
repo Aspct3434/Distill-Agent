@@ -1,3 +1,5 @@
+Self-hosted AI agent that can't say "done" without proof — evidence-gated task contracts, self-distilled skills with auto-rollback, multi-channel.
+
 <p align="center">
   <img src="docs/assets/distill-terminal-banner.svg" alt="Colored Distill terminal banner" width="780">
 </p>
