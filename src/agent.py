@@ -4089,6 +4089,11 @@ def _summarize_host_environment(
     )
 
 
+def _dict_section(data: dict[str, Any], key: str) -> dict[str, Any]:
+    value = data.get(key)
+    return value if isinstance(value, dict) else {}
+
+
 def _format_system_environment_report(raw: str) -> str:
     try:
         data = json.loads(raw) if raw else {}
@@ -4097,11 +4102,11 @@ def _format_system_environment_report(raw: str) -> str:
     if not isinstance(data, dict) or not data:
         return "System environment is unavailable from the active tool environment."
 
-    shell = data.get("shell") if isinstance(data.get("shell"), dict) else {}
-    user = data.get("user") if isinstance(data.get("user"), dict) else {}
-    disk = data.get("disk_cwd") if isinstance(data.get("disk_cwd"), dict) else {}
-    runtimes = data.get("runtimes") if isinstance(data.get("runtimes"), dict) else {}
-    sandbox = data.get("sandbox") if isinstance(data.get("sandbox"), dict) else {}
+    shell = _dict_section(data, "shell")
+    user = _dict_section(data, "user")
+    disk = _dict_section(data, "disk_cwd")
+    runtimes = _dict_section(data, "runtimes")
+    sandbox = _dict_section(data, "sandbox")
 
     available = sorted(name for name, present in runtimes.items() if present)
     unavailable = sorted(name for name, present in runtimes.items() if not present)
