@@ -5,7 +5,7 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "distill-agent"
 version = "0.1.0"
-description = "A production-grade ReAct agent with task-contract execution, MCP tool integration, and skill distillation"
+description = "Self-hosted ReAct agent with task-contract execution, MCP tool integration, and skill distillation"
 requires-python = ">=3.11"
 readme = "README.md"
 

@@ -2,6 +2,8 @@
 
 Here is the high-level architecture diagram for the Distill framework. It visualizes the flow of data from external interfaces (UI, Adapters), through the asynchronous FastAPI gateway, and into the core ReAct Agent loop, which coordinates with memory stores, tooling, and execution sandboxes.
 
+This document covers *what* the pieces are; the design rationale behind each decision lives in [docs/DESIGN.md](docs/DESIGN.md).
+
 ```mermaid
 graph TD
     %% External Interfaces

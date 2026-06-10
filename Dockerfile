@@ -26,7 +26,7 @@ RUN grep -iv "^pywin32" requirements.txt > requirements_linux.txt \
 FROM python:3.12-slim AS runtime
 
 LABEL org.opencontainers.image.title="distill-agent" \
-      org.opencontainers.image.description="Production-grade ReAct agent with MCP tool integration" \
+      org.opencontainers.image.description="Self-hosted ReAct agent with task-contract execution and MCP tool integration" \
       org.opencontainers.image.licenses="MIT"
 
 WORKDIR /app

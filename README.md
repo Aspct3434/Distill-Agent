@@ -9,9 +9,9 @@
 
 **The self-hosted AI agent that can't say "done" without proof.**
 
-Every Distill run is governed by a **task contract**: before finishing, the agent must produce physical evidence — a file written, a test passing, a service answering on its port. No evidence, no "done". That kills the confident-but-wrong "all done!" failure mode that plagues other agents.
+Every Distill run is governed by a **task contract**: before finishing, the agent must produce physical evidence — a file written, a test passing, a service answering on its port. No evidence, no "done".
 
-It also grows with you: Distill learns your projects across sessions, distills its own reusable skills from experience (each one versioned and **auto-rolled-back** if a newer version measurably regresses), remembers with persistent **hybrid memory**, and reaches you on the channels you already use — Telegram, Discord, Slack, email, a real-time streaming control panel, or the terminal.
+Distill also learns your projects across sessions, distills its own reusable skills from experience (each one versioned and rolled back automatically if a newer version measurably regresses), keeps persistent **hybrid memory**, and reaches you over Telegram, Discord, Slack, email, a real-time streaming control panel, or the terminal.
 
 ### Distill TUI
 
@@ -105,20 +105,23 @@ src/
 control-panel/      -- React + Tailwind chat UI with live token streaming
 ```
 
-## 🌟 Key Features
+The reasoning behind these decisions — and the alternatives that were
+rejected — is documented in [docs/DESIGN.md](docs/DESIGN.md).
+
+## Features
 
 * **Task-Contract Execution**: The agent must declare the required execution evidence (files created, services running) before starting a task. The final response is gated on this physical evidence, eliminating "I'll do it now" hallucinations.
 * **Skill Distillation**: After a successful complex task, an LLM evaluates the trajectory and synthesizes a parameterized Python tool. New skills are versioned, validated, and automatically rolled back if their success rate drops.
 * **Session-per-FIFO-Lane Concurrency**: Every user session gets a dedicated queue and worker task, allowing high concurrency with strict message ordering.
 * **Hybrid Memory**: Combines SQLite full-text search, ChromaDB semantic embeddings, and Neo4j graph relationships to recall cross-session context.
-* **Universal Sandboxing**: Run shell operations locally, in Docker, or via serverless platforms (Daytona, E2B, Modal).
+* **Universal Sandboxing**: Run shell operations locally, in Docker, or remotely through a single HTTP exec shim that can front any serverless sandbox (Daytona, E2B, Modal, …).
 * **Shareable Skills**: Export and import distilled skills via the open `SKILL.md` format.
 
-## 📊 Production Readiness
+## Production Readiness
 
-Distill is a focused research framework with a stable core and a set of more
-experimental capabilities around it. This matrix is an honest snapshot of where
-each subsystem stands — treat anything marked *Experimental* as subject to change.
+Distill is a research framework with a stable core and a set of more
+experimental capabilities around it. This matrix shows where each subsystem
+stands — treat anything marked *Experimental* as subject to change.
 
 | Subsystem | Maturity | Notes |
 |---|---|---|
@@ -126,13 +129,13 @@ each subsystem stands — treat anything marked *Experimental* as subject to cha
 | Contract / evidence-gated ReAct loop | **Stable** | Core differentiator; final answer gated on physical evidence. |
 | SQLite checkpointer + session store | **Stable** | Durable per-session state and history. |
 | Local & Docker sandbox | **Stable** | Default execution paths. |
-| Serverless sandboxes (Daytona / E2B / Modal) | **Experimental** | Opt-in via `AGENT_SANDBOX`; less exercised. |
+| Serverless sandbox (HTTP exec shim) | **Experimental** | Opt-in via `AGENT_SANDBOX=http`; one endpoint contract fronts any provider (Daytona, E2B, Modal, …). |
 | ChromaDB semantic + Neo4j graph memory | **Optional** | Degrade gracefully when the backends are absent. |
 | Skill distillation & evolution | **Experimental** | Auto-synthesised skills are versioned and auto-rolled-back on regression. |
 | Sub-agent delegation (`delegate_task`) | **Experimental** | Bounded delegated execution — see [ARCHITECTURE.md](ARCHITECTURE.md). |
 | Messaging adapters (Telegram / Discord / Slack / Email) | **Adapter-tested** | Off by default; activate per token. Local-only without public ingress. |
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Deploy in one click
 
@@ -232,9 +235,9 @@ npx @aspct/distill-agent update   # Pull the latest changes
 npx @aspct/distill-agent doctor   # Diagnose the install and environment
 ```
 
-## ⚙️ Configuration
+## Configuration
 
-Distill is highly configurable via environment variables. Key settings in `an-api.env`:
+Distill is configured via environment variables. Key settings in `an-api.env`:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -246,9 +249,9 @@ Distill is highly configurable via environment variables. Key settings in `an-ap
 | `GATEWAY_RATE_LIMIT_RPM` | `60` | Per-client request limit, keyed by API token or client IP. |
 | `AGENT_LOG_DB_PATH` | `./data/gateway_logs.db` | Persistent SQLite log store used by `/api/logs`. |
 
-## 🔌 Integrations & Adapters
+## Integrations & Adapters
 
-Distill can operate directly in your favorite platforms. Adapters are disabled by default and activate when you provide a bot token in `an-api.env`:
+Adapters are disabled by default and activate when you provide a bot token in `an-api.env`:
 * **Telegram**: Set `TELEGRAM_BOT_TOKEN`. Supports voice note transcriptions via Whisper.
 * **Discord**: Set `DISCORD_BOT_TOKEN`.
 * **Slack**: Set `SLACK_BOT_TOKEN` & `SLACK_APP_TOKEN` (Socket Mode).
@@ -256,15 +259,15 @@ Distill can operate directly in your favorite platforms. Adapters are disabled b
 
 Each channel provides a live typing indicator, streams real-time tool execution logs, and isolates conversations.
 
-## 🧪 Testing
+## Testing
 
-Distill maintains a robust test suite covering contracts, planners, adapters, and the ReAct loop:
+The test suite covers contracts, planners, adapters, and the ReAct loop:
 
 ```bash
 pytest                        # Run the full suite
 pytest tests/test_task_contract_loop.py -v   # Test the anti-hallucination contract system
 ```
 
-## 📄 License
+## License
 
 Distill is released under the [MIT License](LICENSE).

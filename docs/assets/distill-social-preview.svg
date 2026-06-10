@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Distill social preview</title>
+  <desc id="desc">Distill banner with tagline: the self-hosted AI agent that can't say done without proof.</desc>
+  <rect width="1280" height="640" fill="#05070D"/>
+  <text x="155" y="130" fill="#8B5CF6" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="36" font-weight="700" xml:space="preserve">██████╗  ██╗ ███████╗████████╗██╗██╗     ██╗</text>
+  <text x="155" y="174" fill="#7C3AED" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="36" font-weight="700" xml:space="preserve">██╔══██╗ ██║ ██╔════╝╚══██╔══╝██║██║     ██║</text>
+  <text x="155" y="218" fill="#A855F7" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="36" font-weight="700" xml:space="preserve">██║  ██║ ██║ ███████╗   ██║   ██║██║     ██║</text>
+  <text x="155" y="262" fill="#9333EA" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="36" font-weight="700" xml:space="preserve">██║  ██║ ██║ ╚════██║   ██║   ██║██║     ██║</text>
+  <text x="155" y="306" fill="#C084FC" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="36" font-weight="700" xml:space="preserve">██████╔╝ ██║ ███████║   ██║   ██║███████╗███████╗</text>
+  <text x="155" y="350" fill="#7C3AED" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="36" font-weight="700" xml:space="preserve">╚═════╝  ╚═╝ ╚══════╝   ╚═╝   ╚═╝╚══════╝╚══════╝</text>
+  <text x="640" y="448" fill="#E2E8F0" text-anchor="middle" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="37" font-weight="600">The self-hosted AI agent that can&#8217;t say <tspan fill="#C084FC">&#8220;done&#8221;</tspan> without proof.</text>
+  <text x="640" y="520" text-anchor="middle" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="24"><tspan fill="#4ADE80">&#10004;</tspan><tspan fill="#94A3B8"> contract satisfied &#8212; file written &#183; tests passed &#183; service live</tspan></text>
+  <text x="640" y="592" fill="#64748B" text-anchor="middle" font-family="Consolas, Menlo, Monaco, 'Courier New', monospace" font-size="22">github.com/Aspct3434/Distill-Agent</text>
+</svg>
