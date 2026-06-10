@@ -55,7 +55,7 @@ def test_npm_cli_quickstart_dry_run(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "DISTILL" in result.stdout
     assert "Please read before continuing." in result.stdout
-    assert "git clone --branch master https://github.com/Aspct3434/agent-ai.git" in result.stdout
+    assert "git clone --depth 1 --single-branch --branch master https://github.com/Aspct3434/Distill-Agent.git" in result.stdout
     assert 'AGENT_MODEL="gpt-4o"' in result.stdout
     assert 'AGENT_SANDBOX_HOST_FALLBACK="false"' in result.stdout
 

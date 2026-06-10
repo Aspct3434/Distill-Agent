@@ -3,9 +3,15 @@
   <img src="docs/assets/distill-terminal-banner.svg" alt="Colored Distill terminal banner" width="780">
 </p>
 
-A self-hosted AI agent **that grows with you** — it learns your projects across sessions, writes its own reusable skills from experience, and reaches you on the channels you already use.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+</p>
 
-What makes Distill different from other personal agents: it doesn't just *claim* a task is done. Every run is governed by a **task contract** — the agent must produce real evidence (a file written, a test passing, a command succeeding) before it's allowed to finish, which stops the confident-but-wrong "all done!" failure mode. And when it distills a new skill, that skill is **evidence-gated and auto-rolled-back** if a newer version measurably regresses. Persistent **hybrid memory**, a real-time streaming control panel, and Telegram/Discord/Slack/email adapters round it out.
+**The self-hosted AI agent that can't say "done" without proof.**
+
+Every Distill run is governed by a **task contract**: before finishing, the agent must produce physical evidence — a file written, a test passing, a service answering on its port. No evidence, no "done". That kills the confident-but-wrong "all done!" failure mode that plagues other agents.
+
+It also grows with you: Distill learns your projects across sessions, distills its own reusable skills from experience (each one versioned and **auto-rolled-back** if a newer version measurably regresses), remembers with persistent **hybrid memory**, and reaches you on the channels you already use — Telegram, Discord, Slack, email, a real-time streaming control panel, or the terminal.
 
 ### Distill TUI
 
@@ -185,12 +191,12 @@ interactive installer. They are the recommended path on a fresh PC.
 
 **Windows (PowerShell):**
 ```powershell
-irm https://raw.githubusercontent.com/Aspct3434/agent-ai/master/scripts/bootstrap.ps1 | iex
+irm https://raw.githubusercontent.com/Aspct3434/Distill-Agent/master/scripts/bootstrap.ps1 | iex
 ```
 
 **macOS / Linux (bash):**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Aspct3434/agent-ai/master/scripts/bootstrap.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Aspct3434/Distill-Agent/master/scripts/bootstrap.sh | bash
 ```
 
 You can also clone the repo first and run `scripts/bootstrap.ps1` (Windows) or
@@ -207,7 +213,7 @@ npx @aspct/distill-agent install
 Prefer pinning to the exact GitHub revision? Use the repo form:
 
 ```bash
-npx --yes github:Aspct3434/agent-ai install
+npx --yes github:Aspct3434/Distill-Agent install
 ```
 
 After installation, use the CLI to manage the agent:
@@ -258,3 +264,7 @@ Distill maintains a robust test suite covering contracts, planners, adapters, an
 pytest                        # Run the full suite
 pytest tests/test_task_contract_loop.py -v   # Test the anti-hallucination contract system
 ```
+
+## 📄 License
+
+Distill is released under the [MIT License](LICENSE).

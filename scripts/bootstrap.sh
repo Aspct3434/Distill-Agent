@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_REPO_URL="https://github.com/Aspct3434/agent-ai.git"
+DEFAULT_REPO_URL="https://github.com/Aspct3434/Distill-Agent.git"
 REPO_URL="${AGENT_BOOTSTRAP_REPO_URL:-$DEFAULT_REPO_URL}"
 BRANCH="${AGENT_BOOTSTRAP_BRANCH:-master}"
 INSTALL_DIR="${AGENT_BOOTSTRAP_INSTALL_DIR:-$HOME/distill}"

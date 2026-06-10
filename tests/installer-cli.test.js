@@ -62,7 +62,7 @@ function assertIncludes(text, expected) {
   assert.strictEqual(result.status, 0, result.stderr);
   assertIncludes(result.stdout, "DISTILL");
   assertIncludes(result.stdout, "Security Notice");
-  assertIncludes(result.stdout, "[dry-run] git clone --depth 1 --single-branch --branch master https://github.com/Aspct3434/agent-ai.git");
+  assertIncludes(result.stdout, "[dry-run] git clone --depth 1 --single-branch --branch master https://github.com/Aspct3434/Distill-Agent.git");
   assertIncludes(result.stdout, 'AGENT_MODEL="gpt-4o"');
   assertIncludes(result.stdout, 'AGENT_MAX_TOKENS="2048"');
   assertIncludes(result.stdout, 'AGENT_PLANNING_MAX_TOKENS="1024"');

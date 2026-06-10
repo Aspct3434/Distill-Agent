@@ -14,7 +14,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$DefaultRepoUrl = "https://github.com/Aspct3434/agent-ai.git"
+$DefaultRepoUrl = "https://github.com/Aspct3434/Distill-Agent.git"
 if ([string]::IsNullOrWhiteSpace($RepoUrl)) { $RepoUrl = $DefaultRepoUrl }
 if ([string]::IsNullOrWhiteSpace($Branch)) { $Branch = "master" }
 if ([string]::IsNullOrWhiteSpace($InstallDir)) { $InstallDir = Join-Path $HOME "distill" }

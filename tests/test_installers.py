@@ -54,8 +54,9 @@ def _ps_args(shell: str) -> list[str]:
 
 def test_bash_scripts_parse() -> None:
     bash = _bash()
-    _run([bash, "-n", str(BASH_INSTALLER)])
-    _run([bash, "-n", str(BASH_BOOTSTRAP)])
+    # Relative POSIX paths so WSL bash on Windows can resolve them (cwd is PROJECT_ROOT).
+    _run([bash, "-n", BASH_INSTALLER.relative_to(PROJECT_ROOT).as_posix()])
+    _run([bash, "-n", BASH_BOOTSTRAP.relative_to(PROJECT_ROOT).as_posix()])
 
 
 def test_pywin32_requirement_is_windows_only() -> None:
@@ -129,7 +130,7 @@ def test_powershell_bootstrap_dry_run_forwards_options(tmp_path: Path) -> None:
         ]
     )
 
-    assert "git clone --branch master https://github.com/example/agent-ai.git" in result.stdout
+    assert "git clone --depth 1 --single-branch --branch master https://github.com/example/agent-ai.git" in result.stdout
     assert "scripts\\install.ps1" in result.stdout
     assert "-Provider openrouter" in result.stdout
     assert "-Sandbox off" in result.stdout
@@ -191,12 +192,12 @@ def test_readme_empty_pc_commands_use_bootstrap() -> None:
     text = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "npx @aspct/distill-agent install" in text
-    assert "npx --yes github:Aspct3434/agent-ai install" in text
+    assert "npx --yes github:Aspct3434/Distill-Agent install" in text
     assert "npx @aspct/distill-agent doctor" in text
     assert "npm i -g @aspct/distill-agent" in text
     assert "scripts/bootstrap.ps1" in text
     assert "scripts/bootstrap.sh" in text
-    assert "https://raw.githubusercontent.com/Aspct3434/agent-ai/master/scripts/bootstrap.ps1" in text
-    assert "https://raw.githubusercontent.com/Aspct3434/agent-ai/master/scripts/bootstrap.sh" in text
+    assert "https://raw.githubusercontent.com/Aspct3434/Distill-Agent/master/scripts/bootstrap.ps1" in text
+    assert "https://raw.githubusercontent.com/Aspct3434/Distill-Agent/master/scripts/bootstrap.sh" in text
     assert "scripts/install.ps1 | iex" not in text
     assert "scripts/install.sh | bash" not in text
