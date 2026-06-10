@@ -153,6 +153,48 @@ function assertIncludes(text, expected) {
 }
 
 {
+  const installDir = tempInstallDir("deepseek");
+  const result = run([
+    "install",
+    "--dry-run",
+    "--yes",
+    "--no-start",
+    "--install-dir",
+    installDir,
+    "--provider",
+    "deepseek",
+    "--sandbox",
+    "on",
+    "--messaging",
+    "none"
+  ]);
+  assert.strictEqual(result.status, 0, result.stderr);
+  assertIncludes(result.stdout, 'AGENT_MODEL="deepseek/deepseek-chat"');
+  assertIncludes(result.stdout, "DEEPSEEK_API_KEY=");
+}
+
+{
+  const installDir = tempInstallDir("xai");
+  const result = run([
+    "install",
+    "--dry-run",
+    "--yes",
+    "--no-start",
+    "--install-dir",
+    installDir,
+    "--provider",
+    "xai",
+    "--sandbox",
+    "on",
+    "--messaging",
+    "none"
+  ]);
+  assert.strictEqual(result.status, 0, result.stderr);
+  assertIncludes(result.stdout, 'AGENT_MODEL="xai/grok-4"');
+  assertIncludes(result.stdout, "XAI_API_KEY=");
+}
+
+{
   const result = run(["help"]);
   assert.strictEqual(result.status, 0, result.stderr);
   assertIncludes(result.stdout, "distill install");

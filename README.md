@@ -239,6 +239,19 @@ npx @aspct/distill-agent doctor   # Diagnose the install and environment
 
 Distill is configured via environment variables. Key settings in `an-api.env`:
 
+### LLM providers
+
+`AGENT_MODEL` accepts any LiteLLM provider string. The installers can
+preconfigure Kimi/Moonshot, Ollama, OpenRouter, OpenAI, Anthropic, Gemini,
+DeepSeek, Groq, xAI Grok, Mistral, or any OpenAI-compatible endpoint (vLLM) —
+set the matching `*_API_KEY` in `an-api.env`.
+
+For OpenAI you can also **sign in with your ChatGPT account (Codex OAuth)**
+instead of pasting a key: choose it in the installer, or run
+`PYTHONPATH=src python -m auth login` (also available in the control panel
+under Settings → Authentication). The token is stored locally, injected as
+`OPENAI_API_KEY`, and refreshed automatically before LLM calls.
+
 | Variable | Default | Description |
 |---|---|---|
 | `AGENT_MODEL` | `moonshot/kimi-k2.5` | The primary LLM to use (supports any LiteLLM provider string). |

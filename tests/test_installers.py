@@ -82,6 +82,10 @@ def test_powershell_scripts_parse() -> None:
         ("openai", 'AGENT_MODEL="gpt-4o"'),
         ("anthropic", 'ANTHROPIC_API_KEY='),
         ("gemini", 'GEMINI_API_KEY='),
+        ("deepseek", 'AGENT_MODEL="deepseek/deepseek-chat"'),
+        ("groq", 'AGENT_MODEL="groq/llama-3.3-70b-versatile"'),
+        ("xai", 'AGENT_MODEL="xai/grok-4"'),
+        ("mistral", 'AGENT_MODEL="mistral/mistral-large-latest"'),
         ("vllm", 'OPENAI_API_BASE="http://localhost:8001/v1"'),
     ],
 )

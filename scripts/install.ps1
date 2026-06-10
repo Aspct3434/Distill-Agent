@@ -42,7 +42,7 @@ function Prompt-Secret([string]$EnvName, [string]$Prompt) {
 
 function Choose-Provider {
     $value = Normalize $Provider
-    if (@("kimi", "moonshot", "ollama", "openrouter", "openai", "anthropic", "gemini", "vllm") -contains $value) { return $value }
+    if (@("kimi", "moonshot", "ollama", "openrouter", "openai", "anthropic", "gemini", "deepseek", "groq", "xai", "mistral", "vllm") -contains $value) { return $value }
     if ($DryRun) { return "kimi" }
     Write-Host "Choose model provider:"
     Write-Host "  1) Kimi / Moonshot"
@@ -51,7 +51,11 @@ function Choose-Provider {
     Write-Host "  4) OpenAI"
     Write-Host "  5) Anthropic"
     Write-Host "  6) Gemini"
-    Write-Host "  7) vLLM / OpenAI-compatible"
+    Write-Host "  7) DeepSeek"
+    Write-Host "  8) Groq"
+    Write-Host "  9) xAI Grok"
+    Write-Host " 10) Mistral"
+    Write-Host " 11) vLLM / OpenAI-compatible"
     $answer = Read-Host "Provider [1]"
     if ([string]::IsNullOrWhiteSpace($answer)) { $answer = "1" }
     switch ($answer.ToLowerInvariant()) {
@@ -61,7 +65,11 @@ function Choose-Provider {
         "4" { return "openai" }
         "5" { return "anthropic" }
         "6" { return "gemini" }
-        "7" { return "vllm" }
+        "7" { return "deepseek" }
+        "8" { return "groq" }
+        "9" { return "xai" }
+        "10" { return "mistral" }
+        "11" { return "vllm" }
         default { throw "Invalid provider choice: $answer" }
     }
 }
@@ -181,6 +189,10 @@ $OpenAIKey = ""
 $OpenAIBase = ""
 $AnthropicKey = ""
 $GeminiKey = ""
+$DeepSeekKey = ""
+$GroqKey = ""
+$XaiKey = ""
+$MistralKey = ""
 $OllamaBase = ""
 $OpenAIAuthMethod = "apikey"
 
@@ -224,6 +236,30 @@ switch ($ProviderChoice) {
         $FastModel = $AgentModel
         $StrongModel = $AgentModel
         $GeminiKey = Prompt-Secret "GEMINI_API_KEY" "Gemini API key"
+    }
+    "deepseek" {
+        $AgentModel = Choose-Model "DeepSeek" @("deepseek/deepseek-chat", "deepseek/deepseek-reasoner")
+        $FastModel = $AgentModel
+        $StrongModel = $AgentModel
+        $DeepSeekKey = Prompt-Secret "DEEPSEEK_API_KEY" "DeepSeek API key"
+    }
+    "groq" {
+        $AgentModel = Choose-Model "Groq" @("groq/llama-3.3-70b-versatile", "groq/llama-3.1-8b-instant", "groq/openai/gpt-oss-120b", "groq/moonshotai/kimi-k2-instruct")
+        $FastModel = $AgentModel
+        $StrongModel = $AgentModel
+        $GroqKey = Prompt-Secret "GROQ_API_KEY" "Groq API key"
+    }
+    "xai" {
+        $AgentModel = Choose-Model "xAI Grok" @("xai/grok-4", "xai/grok-3", "xai/grok-3-mini", "xai/grok-code-fast-1")
+        $FastModel = $AgentModel
+        $StrongModel = $AgentModel
+        $XaiKey = Prompt-Secret "XAI_API_KEY" "xAI API key"
+    }
+    "mistral" {
+        $AgentModel = Choose-Model "Mistral" @("mistral/mistral-large-latest", "mistral/mistral-medium-latest", "mistral/mistral-small-latest", "mistral/magistral-medium-latest")
+        $FastModel = $AgentModel
+        $StrongModel = $AgentModel
+        $MistralKey = Prompt-Secret "MISTRAL_API_KEY" "Mistral API key"
     }
     "vllm" {
         $AgentModel = Prompt-Value "vLLM model" "openai/meta-llama/Llama-3.2-8B-Instruct"
@@ -278,6 +314,10 @@ function Generated-Env {
         (Env-Line "OPENAI_API_BASE" $OpenAIBase),
         (Env-Line "ANTHROPIC_API_KEY" $AnthropicKey),
         (Env-Line "GEMINI_API_KEY" $GeminiKey),
+        (Env-Line "DEEPSEEK_API_KEY" $DeepSeekKey),
+        (Env-Line "GROQ_API_KEY" $GroqKey),
+        (Env-Line "XAI_API_KEY" $XaiKey),
+        (Env-Line "MISTRAL_API_KEY" $MistralKey),
         (Env-Line "OLLAMA_API_BASE" $OllamaBase),
         (Env-Line "TELEGRAM_BOT_TOKEN" $TelegramToken),
         (Env-Line "TELEGRAM_ALLOWED_IDS" $TelegramAllowed),
@@ -293,7 +333,7 @@ if ($DryRun) {
 }
 
 $managed = @{}
-@("AGENT_MODEL", "FAST_AGENT_MODEL", "STRONG_AGENT_MODEL", "AGENT_ACTION_MAX_REACT_ITERATIONS", "AGENT_MAX_AUTO_CONTINUE_BATCHES", "AGENT_MAX_TOKENS", "AGENT_PLANNING_MAX_TOKENS", "AGENT_ARTIFACT_MAX_TOKENS", "AGENT_FINAL_MAX_TOKENS", "AGENT_SANDBOX", "AGENT_SANDBOX_HOST_FALLBACK", "PUBLIC_BASE_URL", "AGENT_USE_HYBRID_MEMORY", "MOONSHOT_API_KEY", "MOONSHOT_API_BASE", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "OPENAI_API_BASE", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OLLAMA_API_BASE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_IDS", "DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USER_IDS") | ForEach-Object { $managed[$_] = $true }
+@("AGENT_MODEL", "FAST_AGENT_MODEL", "STRONG_AGENT_MODEL", "AGENT_ACTION_MAX_REACT_ITERATIONS", "AGENT_MAX_AUTO_CONTINUE_BATCHES", "AGENT_MAX_TOKENS", "AGENT_PLANNING_MAX_TOKENS", "AGENT_ARTIFACT_MAX_TOKENS", "AGENT_FINAL_MAX_TOKENS", "AGENT_SANDBOX", "AGENT_SANDBOX_HOST_FALLBACK", "PUBLIC_BASE_URL", "AGENT_USE_HYBRID_MEMORY", "MOONSHOT_API_KEY", "MOONSHOT_API_BASE", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "OPENAI_API_BASE", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY", "OLLAMA_API_BASE", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_IDS", "DISCORD_BOT_TOKEN", "DISCORD_ALLOWED_USER_IDS") | ForEach-Object { $managed[$_] = $true }
 
 $out = New-Object System.Collections.Generic.List[string]
 if (Test-Path $EnvFile) {

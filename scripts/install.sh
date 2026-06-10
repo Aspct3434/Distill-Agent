@@ -15,7 +15,7 @@ usage() {
 Agent AI installer
 
 Options:
-  --provider kimi|ollama|openrouter|openai|anthropic|gemini|vllm
+  --provider kimi|ollama|openrouter|openai|anthropic|gemini|deepseek|groq|xai|mistral|vllm
   --sandbox on|off
   --messaging none|telegram|discord|both
   --memory lite|hybrid
@@ -224,7 +224,7 @@ prompt_secret() {
 
 choose_provider() {
   local value; value="$(lower "$PROVIDER")"
-  case "$value" in kimi|moonshot|ollama|openrouter|openai|anthropic|gemini|vllm) printf '%s' "$value"; return ;; esac
+  case "$value" in kimi|moonshot|ollama|openrouter|openai|anthropic|gemini|deepseek|groq|xai|mistral|vllm) printf '%s' "$value"; return ;; esac
   if [[ "$DRY_RUN" -eq 1 ]]; then printf 'kimi'; return; fi
   cat <<'EOF'
 Choose model provider:
@@ -234,13 +234,19 @@ Choose model provider:
   4) OpenAI
   5) Anthropic
   6) Gemini
-  7) vLLM / OpenAI-compatible
+  7) DeepSeek
+  8) Groq
+  9) xAI Grok
+ 10) Mistral
+ 11) vLLM / OpenAI-compatible
 EOF
   read -r -p "Provider [1]: " value
   case "${value:-1}" in
     1) printf 'kimi' ;; 2) printf 'ollama' ;; 3) printf 'openrouter' ;;
     4) printf 'openai' ;; 5) printf 'anthropic' ;; 6) printf 'gemini' ;;
-    7) printf 'vllm' ;; *) echo "Invalid provider: $value" >&2; exit 2 ;;
+    7) printf 'deepseek' ;; 8) printf 'groq' ;; 9) printf 'xai' ;;
+    10) printf 'mistral' ;; 11) printf 'vllm' ;;
+    *) echo "Invalid provider: $value" >&2; exit 2 ;;
   esac
 }
 
@@ -338,6 +344,7 @@ memory="$(choose_memory)"
 agent_model=""; fast_model=""; strong_model=""
 moonshot_key=""; moonshot_base=""; openrouter_key=""; openai_key=""; openai_base=""
 anthropic_key=""; gemini_key=""; ollama_base=""; openai_auth_method="apikey"
+deepseek_key=""; groq_key=""; xai_key=""; mistral_key=""
 
 case "$provider" in
   kimi|moonshot)
@@ -368,6 +375,22 @@ case "$provider" in
   gemini)
     agent_model="$(choose_model 'Gemini' 'gemini/gemini-2.5-flash' 'gemini/gemini-2.5-pro' 'gemini/gemini-2.0-flash' 'gemini/gemini-2.0-flash-lite')"; fast_model="$agent_model"; strong_model="$agent_model"
     gemini_key="$(prompt_secret GEMINI_API_KEY 'Gemini API key')"
+    ;;
+  deepseek)
+    agent_model="$(choose_model 'DeepSeek' 'deepseek/deepseek-chat' 'deepseek/deepseek-reasoner')"; fast_model="$agent_model"; strong_model="$agent_model"
+    deepseek_key="$(prompt_secret DEEPSEEK_API_KEY 'DeepSeek API key')"
+    ;;
+  groq)
+    agent_model="$(choose_model 'Groq' 'groq/llama-3.3-70b-versatile' 'groq/llama-3.1-8b-instant' 'groq/openai/gpt-oss-120b' 'groq/moonshotai/kimi-k2-instruct')"; fast_model="$agent_model"; strong_model="$agent_model"
+    groq_key="$(prompt_secret GROQ_API_KEY 'Groq API key')"
+    ;;
+  xai)
+    agent_model="$(choose_model 'xAI Grok' 'xai/grok-4' 'xai/grok-3' 'xai/grok-3-mini' 'xai/grok-code-fast-1')"; fast_model="$agent_model"; strong_model="$agent_model"
+    xai_key="$(prompt_secret XAI_API_KEY 'xAI API key')"
+    ;;
+  mistral)
+    agent_model="$(choose_model 'Mistral' 'mistral/mistral-large-latest' 'mistral/mistral-medium-latest' 'mistral/mistral-small-latest' 'mistral/magistral-medium-latest')"; fast_model="$agent_model"; strong_model="$agent_model"
+    mistral_key="$(prompt_secret MISTRAL_API_KEY 'Mistral API key')"
     ;;
   vllm)
     agent_model="$(prompt_value 'vLLM model' 'openai/meta-llama/Llama-3.2-8B-Instruct')"; fast_model="$agent_model"; strong_model="$agent_model"
@@ -409,6 +432,10 @@ generated_env() {
   env_line OPENAI_API_BASE "$openai_base"
   env_line ANTHROPIC_API_KEY "$anthropic_key"
   env_line GEMINI_API_KEY "$gemini_key"
+  env_line DEEPSEEK_API_KEY "$deepseek_key"
+  env_line GROQ_API_KEY "$groq_key"
+  env_line XAI_API_KEY "$xai_key"
+  env_line MISTRAL_API_KEY "$mistral_key"
   env_line OLLAMA_API_BASE "$ollama_base"
   env_line TELEGRAM_BOT_TOKEN "$telegram_token"
   env_line TELEGRAM_ALLOWED_IDS "$telegram_allowed"
@@ -422,7 +449,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-managed='AGENT_MODEL|FAST_AGENT_MODEL|STRONG_AGENT_MODEL|AGENT_ACTION_MAX_REACT_ITERATIONS|AGENT_MAX_AUTO_CONTINUE_BATCHES|AGENT_MAX_TOKENS|AGENT_PLANNING_MAX_TOKENS|AGENT_ARTIFACT_MAX_TOKENS|AGENT_FINAL_MAX_TOKENS|AGENT_SANDBOX|AGENT_SANDBOX_HOST_FALLBACK|PUBLIC_BASE_URL|AGENT_USE_HYBRID_MEMORY|MOONSHOT_API_KEY|MOONSHOT_API_BASE|OPENROUTER_API_KEY|OPENAI_API_KEY|OPENAI_API_BASE|ANTHROPIC_API_KEY|GEMINI_API_KEY|OLLAMA_API_BASE|TELEGRAM_BOT_TOKEN|TELEGRAM_ALLOWED_IDS|DISCORD_BOT_TOKEN|DISCORD_ALLOWED_USER_IDS'
+managed='AGENT_MODEL|FAST_AGENT_MODEL|STRONG_AGENT_MODEL|AGENT_ACTION_MAX_REACT_ITERATIONS|AGENT_MAX_AUTO_CONTINUE_BATCHES|AGENT_MAX_TOKENS|AGENT_PLANNING_MAX_TOKENS|AGENT_ARTIFACT_MAX_TOKENS|AGENT_FINAL_MAX_TOKENS|AGENT_SANDBOX|AGENT_SANDBOX_HOST_FALLBACK|PUBLIC_BASE_URL|AGENT_USE_HYBRID_MEMORY|MOONSHOT_API_KEY|MOONSHOT_API_BASE|OPENROUTER_API_KEY|OPENAI_API_KEY|OPENAI_API_BASE|ANTHROPIC_API_KEY|GEMINI_API_KEY|DEEPSEEK_API_KEY|GROQ_API_KEY|XAI_API_KEY|MISTRAL_API_KEY|OLLAMA_API_BASE|TELEGRAM_BOT_TOKEN|TELEGRAM_ALLOWED_IDS|DISCORD_BOT_TOKEN|DISCORD_ALLOWED_USER_IDS'
 tmp="$(mktemp)"
 mkdir -p "$(dirname "$ENV_FILE")"
 if [[ -f "$ENV_FILE" ]]; then
