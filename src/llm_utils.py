@@ -8,11 +8,38 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 
 import litellm
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Credential refreshers
+# ---------------------------------------------------------------------------
+
+_credential_refreshers: list[Callable[[], None]] = []
+
+
+def register_credential_refresher(refresher: Callable[[], None]) -> None:
+    """Register a callable invoked before every LLM call.
+
+    Used by OAuth-style providers whose injected API key expires mid-session
+    (e.g. Codex sign-in): the refresher re-mints and re-injects the key.
+    Refreshers must be cheap no-ops while the credential is still fresh.
+    """
+    if refresher not in _credential_refreshers:
+        _credential_refreshers.append(refresher)
+
+
+async def _refresh_credentials() -> None:
+    for refresher in _credential_refreshers:
+        try:
+            # An actual refresh does blocking HTTP; keep the loop responsive.
+            await asyncio.to_thread(refresher)
+        except Exception as exc:
+            logger.warning("Credential refresher failed: %s", exc)
 
 # ---------------------------------------------------------------------------
 # Rate-limit retry config
@@ -39,6 +66,7 @@ def _make_final_answer(reason: str, content: str) -> dict[str, Any]:
 
 async def _acompletion_with_retry(**kwargs: Any) -> Any:
     """Call litellm.acompletion with bounded retries for provider rate limits."""
+    await _refresh_credentials()
     for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
         try:
             return await litellm.acompletion(**kwargs)
@@ -62,6 +90,7 @@ async def _acompletion_stream_with_retry(**kwargs: Any) -> Any:
 
     Returns the async-iterable stream object so the caller can iterate chunks.
     """
+    await _refresh_credentials()
     kwargs = {**kwargs, "stream": True}
     for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
         try:

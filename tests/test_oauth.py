@@ -93,6 +93,30 @@ class TestComplete:
         with pytest.raises(ValueError):
             mgr.complete("code", "never-issued-state")
 
+    def test_mint_failure_falls_back_to_access_token(self, mgr, monkeypatch) -> None:
+        # ChatGPT-subscription accounts without a platform API org can fail the
+        # api-key mint; the sign-in itself must still succeed.
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        url = mgr.authorize_url()
+        state = parse_qs(urlparse(url).query)["state"][0]
+
+        def fake_post(_url, data=None, timeout=None):
+            if data["grant_type"] == "authorization_code":
+                return _resp({
+                    "access_token": "at-oauth",
+                    "refresh_token": "rt",
+                    "id_token": _jwt({"email": "u@x.io"}),
+                    "expires_in": 3600,
+                })
+            raise RuntimeError("mint rejected")  # the token-exchange request
+
+        with patch.object(oauth_mod.httpx, "post", side_effect=fake_post):
+            ts = mgr.complete("the-code", state)
+
+        assert ts.api_key == "at-oauth"
+        import os
+        assert os.environ["OPENAI_API_KEY"] == "at-oauth"
+
 
 class TestRefresh:
     def test_refresh_updates_and_remints(self, tmp_path, monkeypatch) -> None:

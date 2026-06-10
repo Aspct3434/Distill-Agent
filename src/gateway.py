@@ -33,6 +33,7 @@ from agent import AgentEngine, NormalizedMessage
 from adapters._commands import is_stop_command
 from approvals import ApprovalGate
 from auth.oauth import CodexOAuth, wait_for_callback
+from llm_utils import register_credential_refresher
 from checkpointer import StateCheckpointer, initialize_checkpoints_db
 from evaluator import SkillDistiller, SkillRegistry
 from evolution import EvolutionEngine
@@ -681,6 +682,8 @@ async def lifespan(app: FastAPI):
     # -- Codex OAuth (sign-in alternative to a pasted API key) ------------
     oauth = CodexOAuth()
     oauth.ensure_fresh()  # refresh + re-inject OPENAI_API_KEY if a token exists
+    # Long-running sessions outlive the minted key; refresh before LLM calls.
+    register_credential_refresher(oauth.ensure_fresh)
     app.state.oauth = oauth
 
     gw = Gateway(handler)

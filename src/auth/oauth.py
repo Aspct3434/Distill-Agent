@@ -195,7 +195,15 @@ class CodexOAuth:
             obtained_at=time.time(),
             expires_in=int(body.get("expires_in", 0) or 0),
         )
-        ts.api_key = self._mint_api_key(ts.id_token) if ts.id_token else ts.access_token
+        if ts.id_token:
+            try:
+                ts.api_key = self._mint_api_key(ts.id_token)
+            except Exception as exc:
+                # ChatGPT-subscription accounts without a platform API org can
+                # fail the key mint; a failed mint must not fail the sign-in.
+                logger.warning("Codex API-key mint failed: %s", exc)
+        if not ts.api_key:
+            ts.api_key = ts.access_token
         self._tokens = ts
         self._save()
         self._inject()
