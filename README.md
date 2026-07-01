@@ -115,6 +115,7 @@ rejected — is documented in [docs/DESIGN.md](docs/DESIGN.md).
 * **Session-per-FIFO-Lane Concurrency**: Every user session gets a dedicated queue and worker task, allowing high concurrency with strict message ordering.
 * **Hybrid Memory**: Combines SQLite full-text search, ChromaDB semantic embeddings, and Neo4j graph relationships to recall cross-session context.
 * **Universal Sandboxing**: Run shell operations locally, in Docker, or remotely through a single HTTP exec shim that can front any serverless sandbox (Daytona, E2B, Modal, …).
+* **Usage Metering & Budgets**: Every LLM call is metered per session (tokens, calls, estimated cost) and exposed at `GET /api/usage`. An optional `AGENT_SESSION_TOKEN_BUDGET` caps spend: once a session crosses it, the loop stops calling the model and reports the pause instead of burning tokens.
 * **Shareable Skills**: Export and import distilled skills via the open `SKILL.md` format.
 
 ## Production Readiness
@@ -260,6 +261,7 @@ under Settings → Authentication). The token is stored locally, injected as
 | `AGENT_API_TOKEN` | required | Bearer token for API/WebSocket access; agent endpoints return 503 until set. |
 | `AGENT_ALLOW_INSECURE_NO_AUTH` | `false` | Explicit local-only override for running without API auth. |
 | `GATEWAY_RATE_LIMIT_RPM` | `60` | Per-client request limit, keyed by API token or client IP. |
+| `AGENT_SESSION_TOKEN_BUDGET` | `0` (off) | Max cumulative LLM tokens per session; once exceeded the agent stops calling the model for that session. Live usage is at `GET /api/usage`. |
 | `AGENT_LOG_DB_PATH` | `./data/gateway_logs.db` | Persistent SQLite log store used by `/api/logs`. |
 
 ## Integrations & Adapters

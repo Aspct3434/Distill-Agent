@@ -90,6 +90,7 @@ from task_graph import (
 )
 from tools import ToolManager
 from toolsets import filter_tools_by_toolset
+from usage import current_session_id, usage_tracker
 
 if TYPE_CHECKING:
     from evaluator import SkillRegistry
@@ -110,6 +111,16 @@ def _llm_first_choice(response: Any) -> Any:
     type: ignore comments don't scatter across business logic.
     """
     return response.choices[0]  # type: ignore[union-attr]
+
+
+def _build_budget_exhausted_message(used_tokens: int, budget: int) -> str:
+    return (
+        f"Task paused: this session has used {used_tokens:,} LLM tokens, which "
+        f"exceeds the configured per-session budget of {budget:,} "
+        "(AGENT_SESSION_TOKEN_BUDGET). No further model calls will be made for "
+        "this session. Start a new session, or raise or unset the budget, to "
+        "continue."
+    )
 
 
 def _successful_tool_result_names(steps: list[ExecutionStep]) -> set[str]:
@@ -749,6 +760,12 @@ _MAX_AUTO_CONTINUE_BATCHES = max(1, int(os.getenv("AGENT_MAX_AUTO_CONTINUE_BATCH
 # Escalate the main loop from the fast model to the strong model after this many
 # consecutive iterations whose every tool call errored (only when the tiers differ).
 _ESCALATE_AFTER_CONSECUTIVE_ERROR_ITERS = 2
+
+# Optional per-session spend guardrail: once a session's cumulative LLM token
+# usage (tracked in usage.py) crosses this cap, the ReAct loop stops making
+# model calls for that session and surfaces a "budget exhausted" final answer.
+# 0 (the default) disables the cap.
+_SESSION_TOKEN_BUDGET = max(0, int(os.getenv("AGENT_SESSION_TOKEN_BUDGET", "0")))
 
 _LLM_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "2048"))
 _LLM_PLANNING_MAX_TOKENS = int(os.getenv("AGENT_PLANNING_MAX_TOKENS", "1024"))
@@ -1449,6 +1466,9 @@ class AgentEngine:
           {"type": "tool_call", "tool": str, "params": dict}
           {"type": "text",      "content": str}
         """
+        # Attribute every LLM call made while handling this message (including
+        # sub-agent tasks, which inherit the context) to this session.
+        current_session_id.set(message.session_id)
         yield {"type": "status", "message": "Thinking..."}
 
         messages = self._touch_history(message.session_id)
@@ -1530,6 +1550,7 @@ class AgentEngine:
 
         payload = await self._checkpointer.load_checkpoint(checkpoint_id)
         session_id: str = payload.get("session_id", checkpoint_id)
+        current_session_id.set(session_id)
         messages: list[dict[str, Any]] = list(payload["messages"])
 
         if user_correction is not None:
@@ -2000,6 +2021,15 @@ class AgentEngine:
         )
 
         for iteration in range(iteration_cap):
+            if _SESSION_TOKEN_BUDGET:
+                used_tokens = usage_tracker.session_total_tokens(session_id)
+                if used_tokens >= _SESSION_TOKEN_BUDGET:
+                    budget_message = _build_budget_exhausted_message(
+                        used_tokens, _SESSION_TOKEN_BUDGET
+                    )
+                    messages.append({"role": "assistant", "content": budget_message})
+                    yield _make_final_answer("budget_exhausted", budget_message)
+                    return
             try:
                 if iteration > 0:
                     yield {"type": "status", "message": "Thinking..."}

@@ -978,11 +978,15 @@ class TestLlmRetry:
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_acompletion_stream_with_retry_success(self):
-        mock_stream = unittest.mock.AsyncMock()
-        with unittest.mock.patch("litellm.acompletion", return_value=mock_stream):
+    async def test_acompletion_stream_with_retry_passes_chunks_through(self):
+        async def fake_stream():
+            yield "chunk-1"
+            yield "chunk-2"
+
+        with unittest.mock.patch("litellm.acompletion", return_value=fake_stream()):
             result = await _acompletion_stream_with_retry(model="m", messages=[])
-        assert result is mock_stream
+            chunks = [chunk async for chunk in result]
+        assert chunks == ["chunk-1", "chunk-2"]
 
     def test_rate_limit_user_message_is_string(self):
         msg = _rate_limit_user_message()

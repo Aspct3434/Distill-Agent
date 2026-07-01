@@ -13,6 +13,8 @@ from typing import Any
 
 import litellm
 
+from usage import usage_tracker
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -57,7 +59,7 @@ def _make_final_answer(reason: str, content: str) -> dict[str, Any]:
     """Build a ``final_answer`` event that permanently closes the execution lane.
 
     ``reason`` is one of ``"iteration_limit"``, ``"exception"``,
-    ``"rate_limited"``, or ``"critical_failure"``.
+    ``"rate_limited"``, ``"budget_exhausted"``, or ``"critical_failure"``.
     The frontend should treat this event as a terminal signal -- no further
     events will follow from the same generator invocation.
     """
@@ -69,7 +71,9 @@ async def _acompletion_with_retry(**kwargs: Any) -> Any:
     await _refresh_credentials()
     for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
         try:
-            return await litellm.acompletion(**kwargs)
+            response = await litellm.acompletion(**kwargs)
+            usage_tracker.record_response(response, model=str(kwargs.get("model") or ""))
+            return response
         except Exception as exc:
             if not _is_rate_limit_error(exc) or attempt >= _RATE_LIMIT_MAX_RETRIES:
                 raise
@@ -92,9 +96,14 @@ async def _acompletion_stream_with_retry(**kwargs: Any) -> Any:
     """
     await _refresh_credentials()
     kwargs = {**kwargs, "stream": True}
+    model = str(kwargs.get("model") or "")
     for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
         try:
-            return await litellm.acompletion(**kwargs)
+            result = await litellm.acompletion(**kwargs)
+            if _is_async_iterable(result):
+                return _stream_with_usage_recording(result, model)
+            usage_tracker.record_response(result, model=model)
+            return result
         except Exception as exc:
             if not _is_rate_limit_error(exc) or attempt >= _RATE_LIMIT_MAX_RETRIES:
                 raise
@@ -107,6 +116,32 @@ async def _acompletion_stream_with_retry(**kwargs: Any) -> Any:
             )
             await asyncio.sleep(delay)
     raise RuntimeError("unreachable retry state")
+
+
+async def _stream_with_usage_recording(stream: Any, model: str) -> Any:
+    """Pass chunks through unchanged, recording token usage once at stream end.
+
+    Providers that support it attach a ``usage`` object to the final chunk;
+    otherwise fall back to litellm's chunk builder, which estimates counts from
+    the streamed content. Recording is fail-soft: the call is always counted,
+    with zero tokens when no usage can be determined.
+    """
+    chunks: list[Any] = []
+    try:
+        async for chunk in stream:
+            chunks.append(chunk)
+            yield chunk
+    finally:
+        usage = next(
+            (u for c in reversed(chunks) if (u := getattr(c, "usage", None))), None
+        )
+        if usage is None and chunks:
+            try:
+                built = litellm.stream_chunk_builder(list(chunks))
+                usage = getattr(built, "usage", None)
+            except Exception:
+                usage = None
+        usage_tracker.record(model=model, usage=usage)
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:

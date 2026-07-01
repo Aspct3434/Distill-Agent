@@ -51,6 +51,7 @@ from proxy_auth import (
 from scheduler import CronScheduler, _validate_schedule
 from sqlite_migrations import SQLiteMigration, apply_sqlite_migrations
 from tools import ToolManager
+from usage import usage_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -1038,6 +1039,16 @@ async def status() -> dict[str, Any]:
         "task_graph": engine.task_graph_status_summary(),
         "active_sessions": len(app.state.gateway.active_sessions),
     }
+
+
+@app.get("/api/usage")
+async def usage() -> dict[str, Any]:
+    """LLM token/call/cost usage for this process, cumulative and per session."""
+    snapshot = usage_tracker.snapshot()
+    snapshot["session_token_budget"] = max(
+        0, int(os.getenv("AGENT_SESSION_TOKEN_BUDGET", "0") or 0)
+    )
+    return snapshot
 
 
 @app.get("/api/sessions/search")
