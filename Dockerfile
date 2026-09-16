@@ -18,7 +18,6 @@ ARG INSTALL_ML=false
 COPY requirements.txt requirements-ml.txt ./
 RUN grep -iv "^pywin32" requirements.txt > requirements_linux.txt \
     && pip install --no-cache-dir --prefix=/install -r requirements_linux.txt \
-    && pip install --no-cache-dir --prefix=/install mcp-server-sqlite \
     && if [ "$INSTALL_ML" = "true" ]; then \
          pip install --no-cache-dir --prefix=/install -r requirements-ml.txt; \
        fi

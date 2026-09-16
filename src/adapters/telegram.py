@@ -16,9 +16,12 @@ Configuration (environment variables)
 ``TELEGRAM_BOT_TOKEN``
     Bot token from @BotFather — required to enable this adapter.
 ``TELEGRAM_ALLOWED_IDS``
-    Optional comma-separated list of integer ``chat_id`` / ``user_id``
-    values.  When set, messages from any other ID are silently rejected
-    with an "Access denied" reply.  Unset means open to all.
+    Comma-separated list of integer ``user_id`` values allowed to use the
+    agent. Messages from any other ID are rejected with an "Access denied"
+    reply. Required unless public access is explicitly enabled.
+``AGENT_ALLOW_PUBLIC_CHANNELS``
+    Set to ``true`` only to deliberately accept messages from anyone when no
+    channel allowlist is configured. Defaults to ``false``.
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ from typing import Any
 
 import httpx
 
+from adapters._access import allow_public_channels
 from adapters._commands import (
     PASSIVE_GREETING_RESPONSE,
     is_passive_greeting,
@@ -96,7 +100,7 @@ def _chunk_text(text: str, limit: int = _MSG_LIMIT) -> list[str]:
 def _parse_int_set(raw: str) -> frozenset[int] | None:
     """Parse a comma-separated string of integers into a frozenset.
 
-    Returns ``None`` (open access) when *raw* is empty or whitespace-only.
+    Returns ``None`` when *raw* is empty or whitespace-only.
     Raises ``ValueError`` if any token is not a valid integer.
     """
     stripped = raw.strip()
@@ -130,6 +134,7 @@ class TelegramAdapter:
         self._allowed: frozenset[int] | None = _parse_int_set(
             os.getenv("TELEGRAM_ALLOWED_IDS", "")
         )
+        self._allow_public_channels = allow_public_channels()
         # Voice transcription model (e.g. "whisper-1", "groq/whisper-large-v3").
         # Empty = voice notes are not transcribed.
         self._transcribe_model: str = os.getenv("AGENT_TRANSCRIBE_MODEL", "").strip()
@@ -268,15 +273,18 @@ class TelegramAdapter:
         from_user: dict[str, Any] = message.get("from") or {}
         user_id: int = int(from_user.get("id") or 0)
 
-        # /start is a friendly greeting available to anyone who can reach the bot.
-        if text == "/start":
-            await self._send_message(chat_id, _WELCOME, reply_to_message_id=message_id)
-            return
-
         # Allowlist gate for everything that follows (incl. costly transcription).
+        if self._allowed is None and not self._allow_public_channels:
+            if text:
+                await self._send_message(chat_id, "Access denied.", reply_to_message_id=message_id)
+            return
         if self._allowed is not None and user_id not in self._allowed:
             if text:
                 await self._send_message(chat_id, "Access denied.", reply_to_message_id=message_id)
+            return
+
+        if text == "/start":
+            await self._send_message(chat_id, _WELCOME, reply_to_message_id=message_id)
             return
 
         # Voice / audio note → transcribe it into text and continue as usual.

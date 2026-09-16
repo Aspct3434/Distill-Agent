@@ -180,6 +180,11 @@ class TestRestoreOverdueJobs:
 
 
 class TestValidateSchedule:
+    @pytest.mark.parametrize("spec", ["nan", "inf", "-inf", "1e100"])
+    def test_invalid_interval_values_raise_value_error(self, spec):
+        with pytest.raises(ValueError):
+            _validate_schedule("interval", spec)
+
     def test_interval_minimum(self):
         with pytest.raises(ValueError):
             _validate_schedule("interval", "5")
@@ -193,3 +198,92 @@ class TestValidateSchedule:
         _validate_schedule("cron", "*/5 * * * *")  # no raise
         with pytest.raises(ValueError):
             _validate_schedule("cron", "bad expr")
+
+
+@pytest.mark.asyncio
+async def test_running_job_does_not_reappear_after_removal(tmp_path):
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def runner(_session_id, _prompt):
+        started.set()
+        await finish.wait()
+        return "completed"
+
+    db = str(tmp_path / "scheduler.db")
+    scheduler = CronScheduler(db, runner)
+    await scheduler.start()
+    task = None
+    try:
+        job = await scheduler.add_job(
+            schedule_type="interval", schedule_spec="3600", prompt="run", session_id="s"
+        )
+        task = asyncio.create_task(scheduler._run_job(job))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        assert await scheduler.remove_job(job.job_id)
+        finish.set()
+        await asyncio.wait_for(task, timeout=5)
+
+        restored = CronScheduler(db, runner)
+        await restored._load_jobs()
+        assert restored.get_job(job.job_id) is None
+    finally:
+        finish.set()
+        if task is not None:
+            await task
+        await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_failed_add_is_not_registered_in_memory(tmp_path, monkeypatch):
+    async def runner(_session_id, _prompt):
+        return "ok"
+
+    async def fail_persist(_job):
+        raise OSError("disk full")
+
+    scheduler = CronScheduler(str(tmp_path / "scheduler.db"), runner)
+    monkeypatch.setattr(scheduler, "_persist", fail_persist)
+    with pytest.raises(OSError, match="disk full"):
+        await scheduler.add_job(
+            schedule_type="interval", schedule_spec="3600", prompt="run", session_id="s"
+        )
+    assert scheduler.list_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_toggle_cannot_recreate_concurrently_removed_job(tmp_path, monkeypatch):
+    async def runner(_session_id, _prompt):
+        return "ok"
+
+    db = str(tmp_path / "scheduler.db")
+    scheduler = CronScheduler(db, runner)
+    await scheduler.start()
+    toggling = asyncio.Event()
+    removed = asyncio.Event()
+    persist = scheduler._persist
+
+    async def delayed_persist(job, **kwargs):
+        toggling.set()
+        await removed.wait()
+        await persist(job, **kwargs)
+
+    task = None
+    try:
+        job = await scheduler.add_job(
+            schedule_type="interval", schedule_spec="3600", prompt="run", session_id="s"
+        )
+        monkeypatch.setattr(scheduler, "_persist", delayed_persist)
+        task = asyncio.create_task(scheduler.toggle_job(job.job_id, enabled=False))
+        await asyncio.wait_for(toggling.wait(), timeout=5)
+        assert await scheduler.remove_job(job.job_id)
+        removed.set()
+        await asyncio.wait_for(task, timeout=5)
+        restored = CronScheduler(db, runner)
+        await restored._load_jobs()
+        assert restored.get_job(job.job_id) is None
+    finally:
+        removed.set()
+        if task is not None:
+            await task
+        await scheduler.shutdown()

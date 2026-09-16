@@ -140,7 +140,7 @@ export function OverviewPanel() {
         <StatCard
           icon={Workflow}
           label="Task graphs"
-          value={status?.task_graph.active ?? "â€”"}
+          value={status?.task_graph.active ?? "—"}
           sub={
             status
               ? `${status.task_graph.open_nodes} open / ${status.task_graph.blocked} blocked`

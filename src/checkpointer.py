@@ -75,7 +75,8 @@ class StateCheckpointer:
                 """,
                 (checkpoint_id, session_id, step_number, serialized),
             )
-            # Bound the table: keep only the most recent N checkpoints per session.
+            # Iterations restart each turn and timestamps have second precision;
+            # insertion order identifies the latest N checkpoints per session.
             await db.execute(
                 """
                 DELETE FROM state_snapshots
@@ -83,7 +84,7 @@ class StateCheckpointer:
                   AND checkpoint_id NOT IN (
                       SELECT checkpoint_id FROM state_snapshots
                       WHERE session_id = ?
-                      ORDER BY step_number DESC, created_at DESC
+                      ORDER BY rowid DESC
                       LIMIT ?
                   )
                 """,

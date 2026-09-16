@@ -226,7 +226,7 @@ choose_provider() {
   local value; value="$(lower "$PROVIDER")"
   case "$value" in kimi|moonshot|ollama|openrouter|openai|anthropic|gemini|deepseek|groq|xai|mistral|vllm) printf '%s' "$value"; return ;; esac
   if [[ "$DRY_RUN" -eq 1 ]]; then printf 'kimi'; return; fi
-  cat <<'EOF'
+  cat >&2 <<'EOF'
 Choose model provider:
   1) Kimi / Moonshot
   2) Ollama
@@ -262,7 +262,7 @@ choose_messaging() {
   local value; value="$(lower "$MESSAGING")"
   case "$value" in none|telegram|discord|both) printf '%s' "$value"; return ;; esac
   if [[ "$DRY_RUN" -eq 1 ]]; then printf 'none'; return; fi
-  cat <<'EOF'
+  cat >&2 <<'EOF'
 Choose messaging app:
   1) None
   2) Telegram
@@ -281,7 +281,7 @@ choose_memory() {
   local value; value="$(lower "$MEMORY")"
   case "$value" in lite|hybrid) printf '%s' "$value"; return ;; esac
   if [[ "$DRY_RUN" -eq 1 ]]; then printf 'lite'; return; fi
-  cat <<'EOF'
+  cat >&2 <<'EOF'
 Enable local hybrid memory (ChromaDB + Neo4j + embeddings)?
   1) Lite    - fast install, no ML deps (recommended)
   2) Hybrid  - installs torch/transformers/chromadb (~hundreds of MB)
@@ -400,8 +400,8 @@ case "$provider" in
 esac
 
 telegram_token=""; telegram_allowed=""; discord_token=""; discord_allowed=""
-case "$messaging" in telegram|both) telegram_token="$(prompt_secret TELEGRAM_BOT_TOKEN 'Telegram bot token')"; telegram_allowed="$(prompt_value 'Telegram allowed chat IDs, blank = all' '')" ;; esac
-case "$messaging" in discord|both) discord_token="$(prompt_secret DISCORD_BOT_TOKEN 'Discord bot token')"; discord_allowed="$(prompt_value 'Discord allowed user IDs, blank = all' '')" ;; esac
+case "$messaging" in telegram|both) telegram_token="$(prompt_secret TELEGRAM_BOT_TOKEN 'Telegram bot token')"; telegram_allowed="$(prompt_value 'Telegram allowed chat IDs (comma-separated; blank blocks messages)' '')" ;; esac
+case "$messaging" in discord|both) discord_token="$(prompt_secret DISCORD_BOT_TOKEN 'Discord bot token')"; discord_allowed="$(prompt_value 'Discord allowed user IDs (comma-separated; blank blocks messages)' '')" ;; esac
 
 agent_sandbox=""; sandbox_fallback="false"
 if [[ "$sandbox" == "off" ]]; then sandbox_fallback="true"; fi
@@ -446,12 +446,14 @@ generated_env() {
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "# Dry run: generated env for $ENV_FILE"
   generated_env
+  echo "# AGENT_API_TOKEN will be generated if no existing token is configured."
   exit 0
 fi
 
 managed='AGENT_MODEL|FAST_AGENT_MODEL|STRONG_AGENT_MODEL|AGENT_ACTION_MAX_REACT_ITERATIONS|AGENT_MAX_AUTO_CONTINUE_BATCHES|AGENT_MAX_TOKENS|AGENT_PLANNING_MAX_TOKENS|AGENT_ARTIFACT_MAX_TOKENS|AGENT_FINAL_MAX_TOKENS|AGENT_SANDBOX|AGENT_SANDBOX_HOST_FALLBACK|PUBLIC_BASE_URL|AGENT_USE_HYBRID_MEMORY|MOONSHOT_API_KEY|MOONSHOT_API_BASE|OPENROUTER_API_KEY|OPENAI_API_KEY|OPENAI_API_BASE|ANTHROPIC_API_KEY|GEMINI_API_KEY|DEEPSEEK_API_KEY|GROQ_API_KEY|XAI_API_KEY|MISTRAL_API_KEY|OLLAMA_API_BASE|TELEGRAM_BOT_TOKEN|TELEGRAM_ALLOWED_IDS|DISCORD_BOT_TOKEN|DISCORD_ALLOWED_USER_IDS'
 tmp="$(mktemp)"
 mkdir -p "$(dirname "$ENV_FILE")"
+ENV_FILE="$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE")"
 if [[ -f "$ENV_FILE" ]]; then
   backup="$ENV_FILE.bak.$(date +%Y%m%d%H%M%S)"
   cp "$ENV_FILE" "$backup"
@@ -460,6 +462,25 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 { [[ -s "$tmp" ]] && cat "$tmp" && echo; generated_env; } > "$ENV_FILE"
 rm -f "$tmp"
+
+has_env_secret() {
+  [[ -f "$1" ]] || return 1
+  awk -v key="$2" '
+    $0 ~ "^[ \t]*(export[ \t]+)?" key "[ \t]*=" {
+      value = $0
+      sub(/^[^=]*=[ \t]*/, "", value)
+      sub(/[ \t]+#.*/, "", value)
+      sub(/[ \t\r]*$/, "", value)
+    }
+    END { exit(value == "" || value == "\"\"" || value == "\047\047" || value ~ /^#/) }
+  ' "$1"
+}
+
+if ! has_env_secret "$ENV_FILE" AGENT_API_TOKEN; then
+  token="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  printf '\nAGENT_API_TOKEN=%s\n' "$token" >> "$ENV_FILE"
+fi
+chmod 600 "$ENV_FILE" 2>/dev/null || true
 echo "Wrote $ENV_FILE"
 
 # docker-compose.yml requires NEO4J_PASSWORD (no insecure default). Compose
@@ -467,10 +488,10 @@ echo "Wrote $ENV_FILE"
 ensure_neo4j_password() {
   local compose_env="$ROOT_DIR/.env"
   [[ -n "${NEO4J_PASSWORD:-}" ]] && return 0
-  [[ -f "$compose_env" ]] && grep -q '^NEO4J_PASSWORD=' "$compose_env" && return 0
+  has_env_secret "$compose_env" NEO4J_PASSWORD && return 0
   local pw
   pw="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  printf 'NEO4J_PASSWORD=%s\n' "$pw" >> "$compose_env"
+  printf '\nNEO4J_PASSWORD=%s\n' "$pw" >> "$compose_env"
   chmod 600 "$compose_env" 2>/dev/null || true
   echo "Generated NEO4J_PASSWORD in $compose_env"
 }
@@ -478,7 +499,7 @@ ensure_neo4j_password() {
 if [[ "$NO_START" -eq 0 ]]; then
   if [[ "$sandbox" == "on" ]]; then
     ensure_neo4j_password
-    (cd "$ROOT_DIR" && INSTALL_ML="$use_hybrid" AGENT_USE_HYBRID_MEMORY="$use_hybrid" docker compose up -d --build)
+    (cd "$ROOT_DIR" && AGENT_ENV_FILE="$ENV_FILE" INSTALL_ML="$use_hybrid" AGENT_USE_HYBRID_MEMORY="$use_hybrid" docker compose up -d --build)
   else
     python_bin="$(ensure_python)"
     mkdir -p "$ROOT_DIR/logs"
@@ -498,7 +519,7 @@ if [[ "$NO_START" -eq 0 ]]; then
     else
       (cd "$ROOT_DIR" && .run-venv/bin/python -m pip install "${req_args[@]}")
     fi
-    (cd "$ROOT_DIR" && . .run-venv/bin/activate && set -a && . "$ENV_FILE" && set +a && nohup python -m uvicorn gateway:app --app-dir src --host 127.0.0.1 --port 8000 > logs/backend-local.stdout.log 2> logs/backend-local.stderr.log &)
+    (cd "$ROOT_DIR" && nohup .run-venv/bin/python -m uvicorn gateway:app --app-dir src --env-file "$ENV_FILE" --host 127.0.0.1 --port 8000 > logs/backend-local.stdout.log 2> logs/backend-local.stderr.log &)
     (cd "$ROOT_DIR/control-panel" && npm ci --no-audit --no-fund && nohup npm run dev -- --host 127.0.0.1 --port 5173 > ../logs/control-panel-dev.stdout.log 2> ../logs/control-panel-dev.stderr.log &)
   fi
 fi
@@ -506,6 +527,7 @@ fi
 echo "Agent AI setup complete."
 echo "Control panel: http://localhost:5173"
 echo "API health:    http://localhost:8000/health"
+echo "Copy AGENT_API_TOKEN from $ENV_FILE into Control Panel Settings."
 
 if [[ "$openai_auth_method" == "oauth" ]]; then
   echo ""

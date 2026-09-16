@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from adapters.discord_bot import DiscordAdapter, _chunk_text, _parse_str_set
 
+
+@pytest.fixture(autouse=True)
+def allow_public_channels(monkeypatch):
+    """Keep legacy streaming tests focused on adapter behavior, not access setup."""
+    monkeypatch.setenv("AGENT_ALLOW_PUBLIC_CHANNELS", "true")
+
 # ---------------------------------------------------------------------------
 # Pure helper: _chunk_text
 # ---------------------------------------------------------------------------
@@ -148,6 +154,20 @@ def _make_msg(
 
 
 class TestDiscordGating:
+    @pytest.mark.asyncio
+    async def test_no_allowlist_is_denied_by_default(
+        self, monkeypatch, echo_stream_fn, mock_http, reset_fn
+    ) -> None:
+        monkeypatch.delenv("AGENT_ALLOW_PUBLIC_CHANNELS", raising=False)
+        adapter = DiscordAdapter(
+            token="Bot-test-token", stream_fn=echo_stream_fn, reset_fn=reset_fn
+        )
+        adapter._http = mock_http
+
+        await adapter._handle_message(_make_msg("run a command"))
+
+        mock_http.post.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_bot_messages_ignored(self, adapter, mock_http) -> None:
         await adapter._handle_message(_make_msg("I'm a bot", is_bot=True))

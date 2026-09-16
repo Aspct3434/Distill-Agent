@@ -15,8 +15,11 @@ Configuration (environment variables)
 ``DISCORD_BOT_TOKEN``
     Bot token from discord.com/developers — required to enable this adapter.
 ``DISCORD_ALLOWED_USER_IDS``
-    Optional comma-separated list of Discord user ID strings.  When set,
-    messages from any other user are ignored.  Unset means open to all.
+    Comma-separated list of Discord user ID strings. Messages from any other
+    user are ignored. Required unless public access is explicitly enabled.
+``AGENT_ALLOW_PUBLIC_CHANNELS``
+    Set to ``true`` only to deliberately accept messages from anyone when no
+    channel allowlist is configured. Defaults to ``false``.
 
 Privileged intent note
 ----------------------
@@ -38,6 +41,7 @@ from typing import Any
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
+from adapters._access import allow_public_channels
 from adapters._commands import (
     PASSIVE_GREETING_RESPONSE,
     is_passive_greeting,
@@ -120,7 +124,7 @@ def _chunk_text(text: str, limit: int = _MSG_LIMIT) -> list[str]:
 def _parse_str_set(raw: str) -> frozenset[str] | None:
     """Parse a comma-separated string into a frozenset of stripped strings.
 
-    Returns ``None`` (open access) when *raw* is empty or whitespace-only.
+    Returns ``None`` when *raw* is empty or whitespace-only.
     """
     stripped = raw.strip()
     if not stripped:
@@ -153,6 +157,7 @@ class DiscordAdapter:
         self._allowed: frozenset[str] | None = _parse_str_set(
             os.getenv("DISCORD_ALLOWED_USER_IDS", "")
         )
+        self._allow_public_channels = allow_public_channels()
         # Gateway session state — reset on each fresh IDENTIFY.
         self._seq: int | None = None
         self._session_id: str | None = None
@@ -321,6 +326,8 @@ class DiscordAdapter:
             return
 
         user_id: str = str(author.get("id") or "")
+        if self._allowed is None and not self._allow_public_channels:
+            return
         if self._allowed is not None and user_id not in self._allowed:
             return
 

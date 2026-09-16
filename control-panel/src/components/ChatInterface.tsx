@@ -100,8 +100,7 @@ function loadHistoryState(): { conversations: Conversation[]; activeId: string }
       };
     }
   } catch {
-    localStorage.removeItem(HISTORY_STORAGE_KEY);
-    localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+    // Storage may be blocked; keep the chat usable with in-memory history.
   }
 
   const firstConversation = createConversation();
@@ -316,11 +315,11 @@ export function ChatInterface() {
     conversations[0];
 
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
-  const executionStatus: "idle" | "thinking" | "executing_tool" | "success" =
+  const executionStatus: "idle" | "thinking" | "executing_tool" | "complete" =
     activeUserText === null
       ? "idle"
-      : lastEvent?.type === "text" || lastEvent?.type === "final_answer"
-        ? "success"
+      : lastEvent?.type === "text" || lastEvent?.type === "final_answer" || lastEvent?.type === "error"
+        ? "complete"
         : lastEvent?.type === "tool_call"
           ? "executing_tool"
           : "thinking";
@@ -366,8 +365,12 @@ export function ChatInterface() {
   }, [activeConversation, activeUserText, clearEvents, events]);
 
   useEffect(() => {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(conversations));
-    localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeConversationId);
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(conversations));
+      localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeConversationId);
+    } catch {
+      // Blocked or full browser storage must not interrupt the active chat.
+    }
   }, [activeConversationId, conversations]);
 
   useEffect(() => {
@@ -375,14 +378,14 @@ export function ChatInterface() {
   }, [activeConversationId, activeUserText, conversations, events, streamingText]);
 
   useEffect(() => {
-    if (activeUserText !== null && executionStatus === "success") {
+    if (activeUserText !== null && executionStatus === "complete") {
       commitLiveTurn();
     }
   }, [activeUserText, commitLiveTurn, executionStatus]);
 
   function handleNewChat() {
     if (!canNavigateHistory) return;
-    if (activeUserText !== null && executionStatus === "success") {
+    if (activeUserText !== null && executionStatus === "complete") {
       commitLiveTurn();
     }
 
@@ -396,7 +399,7 @@ export function ChatInterface() {
 
   function handleSelectConversation(conversationId: string) {
     if (!canNavigateHistory || conversationId === activeConversationId) return;
-    if (activeUserText !== null && executionStatus === "success") {
+    if (activeUserText !== null && executionStatus === "complete") {
       commitLiveTurn();
     }
 
@@ -433,6 +436,7 @@ export function ChatInterface() {
     e?.preventDefault();
     const text = input.trim();
     if (!text || status !== "connected" || isAgentBusy || !activeConversation) return;
+    if (!sendMessage(text, activeConversation.sessionId)) return;
 
     const now = Date.now();
     setConversations((previous) =>
@@ -455,7 +459,6 @@ export function ChatInterface() {
     clearEvents();
     liveTurnStartedAtRef.current = now;
     setActiveUserText(text);
-    sendMessage(text, activeConversation.sessionId);
     setInput("");
   }
 
@@ -465,7 +468,7 @@ export function ChatInterface() {
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSubmit();
     }

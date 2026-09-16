@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Brain, Download, RefreshCw, Sparkles, TrendingUp } from "lucide-react";
-import { api, API_BASE, type Skill } from "../lib/api";
+import { api, type Skill } from "../lib/api";
 
 function fmtDate(value: string | null): string {
   if (!value) return "never";
@@ -20,6 +20,7 @@ export function SkillsPanel() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -37,6 +38,26 @@ export function SkillsPanel() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional fetch-on-mount
     void load();
   }, [load]);
+
+  async function exportSkill(name: string) {
+    setExporting(name);
+    try {
+      const blob = await api.blob(`/api/skills/${encodeURIComponent(name)}/export.md`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${name}.md`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(null);
+    }
+  }
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4">
@@ -97,15 +118,16 @@ export function SkillsPanel() {
                   {skill.evolution_status}
                 </span>
               )}
-              <a
-                href={`${API_BASE}/api/skills/${encodeURIComponent(skill.name)}/export.md`}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() => void exportSkill(skill.name)}
+                disabled={exporting !== null}
+                aria-label={`Export ${skill.name}`}
                 title="Export as agentskills.io SKILL.md"
                 className="ml-auto flex size-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
               >
                 <Download size={14} />
-              </a>
+              </button>
             </div>
 
             {skill.description && (

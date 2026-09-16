@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import uuid
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
@@ -227,8 +228,8 @@ class CronScheduler:
             deliver_to=deliver_to,
         )
         job.next_run = job.compute_next_run()
-        self._jobs[job.job_id] = job
         await self._persist(job)
+        self._jobs[job.job_id] = job
         logger.info(
             "Scheduled job created: %s [%s %s] next=%s",
             job.job_id,
@@ -241,10 +242,10 @@ class CronScheduler:
     async def remove_job(self, job_id: str) -> bool:
         if job_id not in self._jobs:
             return False
-        del self._jobs[job_id]
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute("DELETE FROM scheduled_jobs WHERE job_id = ?", (job_id,))
             await db.commit()
+        self._jobs.pop(job_id, None)
         return True
 
     async def toggle_job(self, job_id: str, *, enabled: bool) -> bool:
@@ -254,7 +255,7 @@ class CronScheduler:
         job.enabled = enabled
         if enabled and job.next_run is None:
             job.next_run = job.compute_next_run()
-        await self._persist(job)
+        await self._persist(job, update_only=True)
         return True
 
     def list_jobs(self) -> list[dict[str, Any]]:
@@ -300,7 +301,7 @@ class CronScheduler:
             logger.info("One-shot job %s completed and disabled", job.job_id)
         else:
             job.next_run = next_run
-        await self._persist(job)
+        await self._persist(job, update_only=True)
 
         try:
             result = await self._runner(job.session_id, job.prompt)
@@ -315,14 +316,22 @@ class CronScheduler:
             job.last_result = f"ERROR: {exc}"
             logger.exception("Scheduled job %s failed", job.job_id)
         finally:
-            await self._persist(job)
+            await self._persist(job, update_only=True)
 
-    async def _persist(self, job: ScheduledJob) -> None:
+    async def _persist(self, job: ScheduledJob, *, update_only: bool = False) -> None:
         async with aiosqlite.connect(self._db_path) as db:
-            await db.execute(
-                "INSERT OR REPLACE INTO scheduled_jobs (job_id, data) VALUES (?, ?)",
-                (job.job_id, json.dumps(job.to_dict())),
-            )
+            data = json.dumps(job.to_dict())
+            if update_only:
+                # An in-flight run must never recreate a job removed by the user.
+                await db.execute(
+                    "UPDATE scheduled_jobs SET data = ? WHERE job_id = ?",
+                    (data, job.job_id),
+                )
+            else:
+                await db.execute(
+                    "INSERT OR REPLACE INTO scheduled_jobs (job_id, data) VALUES (?, ?)",
+                    (job.job_id, data),
+                )
             await db.commit()
 
     async def _load_jobs(self) -> None:
@@ -369,8 +378,12 @@ class CronScheduler:
 def _validate_schedule(schedule_type: str, spec: str) -> None:
     if schedule_type == "interval":
         secs = float(spec)
-        if secs < 10:
-            raise ValueError("Interval must be at least 10 seconds")
+        if not math.isfinite(secs) or secs < 10:
+            raise ValueError("Interval must be finite and at least 10 seconds")
+        try:
+            datetime.now(UTC) + timedelta(seconds=secs)
+        except OverflowError as exc:
+            raise ValueError("Interval is too large") from exc
     elif schedule_type == "cron":
         _cron_next_run(spec, datetime.now(UTC))  # dry-run parse
     elif schedule_type == "once":

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import re
 import time
@@ -53,10 +54,14 @@ class ApprovalGate:
     """Tracks pending command approvals and lets the agent await a decision."""
 
     def __init__(self, mode: str | None = None, timeout: float | None = None) -> None:
-        self._mode = (mode or os.getenv("AGENT_REQUIRE_APPROVAL") or "off").lower()
+        self._mode = (mode or os.getenv("AGENT_REQUIRE_APPROVAL") or "off").strip().lower()
+        if self._mode not in {"off", "risky", "all"}:
+            raise ValueError("Approval mode must be off, risky, or all")
         self._timeout = timeout if timeout is not None else float(
             os.getenv("AGENT_APPROVAL_TIMEOUT", "120")
         )
+        if not math.isfinite(self._timeout) or self._timeout <= 0:
+            raise ValueError("Approval timeout must be finite and greater than zero")
         self._pending: dict[str, dict[str, Any]] = {}
         self._futures: dict[str, asyncio.Future[bool]] = {}
 
@@ -78,7 +83,7 @@ class ApprovalGate:
         rid = uuid.uuid4().hex[:12]
         self._pending[rid] = {
             "id": rid,
-            "command": (command or "")[:500],
+            "command": command or "",
             "session_id": session_id,
             "created_at": time.time(),
         }

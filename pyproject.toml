@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "distill-agent"
 # Keep in lockstep with the npm installer package version (package.json).
-version = "0.2.6"
+version = "0.2.7"
 description = "Self-hosted ReAct agent with task-contract execution, MCP tool integration, and skill distillation"
 requires-python = ">=3.11"
 readme = "README.md"

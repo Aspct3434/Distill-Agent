@@ -19,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from adapters.telegram import TelegramAdapter, _chunk_text, _parse_int_set
 
+
+@pytest.fixture(autouse=True)
+def allow_public_channels(monkeypatch):
+    """Keep legacy streaming tests focused on adapter behavior, not access setup."""
+    monkeypatch.setenv("AGENT_ALLOW_PUBLIC_CHANNELS", "true")
+
 # ---------------------------------------------------------------------------
 # Pure helper: _chunk_text
 # ---------------------------------------------------------------------------
@@ -168,6 +174,21 @@ def _chat_actions(mock_http: AsyncMock) -> list:
 
 
 class TestTelegramGating:
+    @pytest.mark.asyncio
+    async def test_no_allowlist_is_denied_by_default(
+        self, monkeypatch, echo_stream_fn, mock_http, reset_fn
+    ) -> None:
+        monkeypatch.delenv("AGENT_ALLOW_PUBLIC_CHANNELS", raising=False)
+        adapter = TelegramAdapter(
+            token="test-token", stream_fn=echo_stream_fn, reset_fn=reset_fn
+        )
+        adapter._http = mock_http
+
+        await adapter._handle_update(_make_update(0, 42, 99, "run a command"))
+
+        assert _sent_texts(mock_http) == ["Access denied."]
+        assert _chat_actions(mock_http) == []
+
     @pytest.mark.asyncio
     async def test_start_command_sends_welcome(self, adapter, mock_http) -> None:
         await adapter._handle_update(_make_update(1, 42, 99, "/start"))

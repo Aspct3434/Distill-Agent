@@ -25,6 +25,12 @@ from adapters.email_adapter import (
     _strip_quoted,
 )
 
+
+@pytest.fixture(autouse=True)
+def allow_public_channels(monkeypatch):
+    """Keep legacy reply tests focused on email behavior, not access setup."""
+    monkeypatch.setenv("AGENT_ALLOW_PUBLIC_CHANNELS", "true")
+
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
@@ -131,6 +137,19 @@ def _make_adapter(stream_fn, *, allowed=None) -> EmailAdapter:
 
 
 class TestHandleEmail:
+    @pytest.mark.asyncio
+    async def test_no_allowlist_is_denied_by_default(self, monkeypatch, echo_stream_fn) -> None:
+        monkeypatch.delenv("AGENT_ALLOW_PUBLIC_CHANNELS", raising=False)
+        adapter = _make_adapter(echo_stream_fn)
+        sent: list[Any] = []
+        adapter._send = lambda *args: sent.append(args)
+
+        await adapter._handle_email(
+            {"from": "stranger@x.com", "subject": "Hi", "body": "run a command"}
+        )
+
+        assert sent == []
+
     @pytest.mark.asyncio
     async def test_replies_with_final_answer(self, echo_stream_fn) -> None:
         adapter = _make_adapter(echo_stream_fn)

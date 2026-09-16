@@ -18,6 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from adapters.slack import SlackAdapter, _chunk_text, _parse_str_set
 
+
+@pytest.fixture(autouse=True)
+def allow_public_channels(monkeypatch):
+    """Keep legacy streaming tests focused on adapter behavior, not access setup."""
+    monkeypatch.setenv("AGENT_ALLOW_PUBLIC_CHANNELS", "true")
+
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
@@ -106,6 +112,23 @@ def _msg(text: str, channel: str = "C1", user: str = "U1", **extra) -> dict:
 
 
 class TestSlackGating:
+    @pytest.mark.asyncio
+    async def test_no_allowlist_is_denied_by_default(
+        self, monkeypatch, echo_stream_fn, mock_http, reset_fn
+    ) -> None:
+        monkeypatch.delenv("AGENT_ALLOW_PUBLIC_CHANNELS", raising=False)
+        adapter = SlackAdapter(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            stream_fn=echo_stream_fn,
+            reset_fn=reset_fn,
+        )
+        adapter._http = mock_http
+
+        await adapter._handle_event(_msg("run a command"))
+
+        mock_http.post.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_non_message_event_ignored(self, adapter, mock_http) -> None:
         await adapter._handle_event({"type": "reaction_added"})

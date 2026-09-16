@@ -61,7 +61,7 @@ export interface UseAgentStreamReturn {
   events: AgentEvent[];
   streamingText: string;
   status: ConnectionStatus;
-  sendMessage: (text: string, sessionId?: string) => void;
+  sendMessage: (text: string, sessionId?: string) => boolean;
   stopMessage: (sessionId?: string) => void;
   clearEvents: () => void;
 }
@@ -78,28 +78,28 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelayRef = useRef(BASE_DELAY_MS);
   const sessionIdRef = useRef(crypto.randomUUID());
-  const connectRef = useRef<() => void>(() => {});
-  const activeRef = useRef(false);
+  const pendingRef = useRef(false);
+  const streamingTextRef = useRef("");
 
   useEffect(() => {
-    activeRef.current = true;
+    let active = true;
     reconnectDelayRef.current = BASE_DELAY_MS;
 
     function connect() {
-      if (!activeRef.current) return;
+      if (!active) return;
       setStatus("connecting");
 
       const ws = new WebSocket(withWsToken(url));
       socketRef.current = ws;
 
       ws.onopen = () => {
-        if (!activeRef.current) return;
+        if (!active || socketRef.current !== ws) return;
         reconnectDelayRef.current = BASE_DELAY_MS;
         setStatus("connected");
       };
 
       ws.onmessage = (event) => {
-        if (!activeRef.current) return;
+        if (!active || socketRef.current !== ws) return;
         let payload: unknown;
         try {
           payload = JSON.parse(event.data as string);
@@ -116,6 +116,7 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
 
         const parsed = payload as { type: string };
         if (parsed.type === "token") {
+          streamingTextRef.current += (parsed as TokenEvent).content;
           setStreamingText((previous) => previous + (parsed as TokenEvent).content);
         } else if (
           parsed.type === "tool_call" ||
@@ -126,6 +127,17 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
           parsed.type === "error"
         ) {
           if (parsed.type === "text" || parsed.type === "final_answer") {
+            pendingRef.current = false;
+            streamingTextRef.current = "";
+            setStreamingText("");
+          }
+          if (parsed.type === "error") {
+            pendingRef.current = false;
+            const partialText = streamingTextRef.current;
+            if (partialText) {
+              setEvents((previous) => [...previous, { type: "text", content: partialText }]);
+            }
+            streamingTextRef.current = "";
             setStreamingText("");
           }
           if (parsed.type === "status") {
@@ -141,23 +153,34 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
       };
 
       ws.onclose = () => {
-        if (!activeRef.current) return;
+        if (!active || socketRef.current !== ws) return;
+        socketRef.current = null;
         setStatus("disconnected");
+        if (pendingRef.current) {
+          pendingRef.current = false;
+          const partialText = streamingTextRef.current;
+          setEvents((previous) => [
+            ...previous,
+            ...(partialText ? [{ type: "text" as const, content: partialText }] : []),
+            { type: "error", detail: "Connection lost. The response was interrupted. Reconnect to try again." },
+          ]);
+          streamingTextRef.current = "";
+          setStreamingText("");
+        }
         reconnectTimerRef.current = setTimeout(() => {
           reconnectDelayRef.current = Math.min(
             reconnectDelayRef.current * 2,
             MAX_DELAY_MS,
           );
-          connectRef.current();
+          connect();
         }, reconnectDelayRef.current);
       };
     }
 
-    connectRef.current = connect;
     connect();
 
     return () => {
-      activeRef.current = false;
+      active = false;
       if (reconnectTimerRef.current !== null) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -169,8 +192,10 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
 
   const sendMessage = useCallback((text: string, sessionId?: string) => {
     const ws = socketRef.current;
-    if (ws?.readyState !== WebSocket.OPEN) return;
+    if (ws?.readyState !== WebSocket.OPEN || pendingRef.current) return false;
     ws.send(JSON.stringify({ session_id: sessionId ?? sessionIdRef.current, text }));
+    pendingRef.current = true;
+    return true;
   }, []);
 
   const stopMessage = useCallback((sessionId?: string) => {
@@ -183,6 +208,7 @@ export function useAgentStream(url: string): UseAgentStreamReturn {
 
   const clearEvents = useCallback(() => {
     setEvents([]);
+    streamingTextRef.current = "";
     setStreamingText("");
   }, []);
 

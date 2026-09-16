@@ -1,6 +1,7 @@
 """Tests for cross-session full-text memory (SessionStore)."""
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -69,3 +70,29 @@ def test_limit_respected(store):
     for i in range(10):
         store.add_turn("s", "user", f"alpha message number {i}")
     assert len(store.search("alpha", limit=3)) == 3
+
+
+def test_quoted_query_finds_turn(store):
+    store.add_turn("s", "user", 'Remember the "important" password hint')
+    hits = store.search('"important"')
+    assert len(hits) == 1
+    assert "important" in hits[0]["content"]
+
+
+def test_connection_is_closed_after_use(store):
+    with store._connect() as conn:
+        assert conn.execute("SELECT 1").fetchone() == (1,)
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        conn.execute("SELECT 1")
+
+
+def test_connection_rolls_back_and_closes_after_failure(store):
+    with pytest.raises(RuntimeError, match="abort"), store._connect() as conn:
+        conn.execute(
+            "INSERT INTO turns (session_id, role, ts, content) VALUES (?, ?, ?, ?)",
+            ("s", "user", 1, "uncommitted"),
+        )
+        raise RuntimeError("abort")
+    assert store.search("uncommitted") == []
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        conn.execute("SELECT 1")

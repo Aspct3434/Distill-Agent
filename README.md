@@ -265,10 +265,12 @@ under Settings → Authentication). The token is stored locally, injected as
 ## Integrations & Adapters
 
 Adapters are disabled by default and activate when you provide a bot token in `an-api.env`:
-* **Telegram**: Set `TELEGRAM_BOT_TOKEN`. Supports voice note transcriptions via Whisper.
-* **Discord**: Set `DISCORD_BOT_TOKEN`.
-* **Slack**: Set `SLACK_BOT_TOKEN` & `SLACK_APP_TOKEN` (Socket Mode).
-* **Email**: Set `EMAIL_ADDRESS`, `EMAIL_PASSWORD`, `EMAIL_IMAP_HOST`, `EMAIL_SMTP_HOST`.
+* **Telegram**: Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_IDS`. Supports voice note transcriptions via Whisper.
+* **Discord**: Set `DISCORD_BOT_TOKEN` and `DISCORD_ALLOWED_USER_IDS`.
+* **Slack**: Set `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USERS` (Socket Mode).
+* **Email**: Set `EMAIL_ADDRESS`, `EMAIL_PASSWORD`, `EMAIL_IMAP_HOST`, `EMAIL_SMTP_HOST`, and `EMAIL_ALLOWED_SENDERS`.
+
+Inbound messaging channels reject all senders unless their allowlist is configured. `AGENT_ALLOW_PUBLIC_CHANNELS=true` is an explicit opt-in for a public channel and should not be used when the agent has access to trusted tools or files.
 
 Each channel provides a live typing indicator, streams real-time tool execution logs, and isolates conversations.
 

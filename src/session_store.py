@@ -14,6 +14,8 @@ import logging
 import re
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -52,14 +54,19 @@ class SessionStore:
         self._path = str(db_path)
         self._fts = self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self._path, timeout=5.0)
         # WAL (set once, persisted in the DB header) plus synchronous=NORMAL
         # turns each per-turn write from a blocking fsync into a far cheaper
         # append, and lets reads proceed concurrently with writes.
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+        try:
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self) -> bool:
         Path(self._path).parent.mkdir(parents=True, exist_ok=True)
@@ -106,7 +113,7 @@ class SessionStore:
     @staticmethod
     def _fts_query(query: str) -> str:
         # Quote each token so user text can't break FTS5 query syntax.
-        tokens = [t for t in re.split(r"\s+", query) if t]
+        tokens = [t.replace('"', '""') for t in re.split(r"\s+", query) if t]
         return " OR ".join(f'"{t}"' for t in tokens) or '""'
 
     def search(

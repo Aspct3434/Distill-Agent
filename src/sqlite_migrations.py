@@ -27,7 +27,9 @@ def apply_sqlite_migrations(
     namespace: str,
     migrations: list[SQLiteMigration] | tuple[SQLiteMigration, ...],
 ) -> None:
-    """Apply pending SQLite migrations on a synchronous sqlite3 connection."""
+    """Apply migrations atomically; the caller commits or rolls back the transaction."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute(_CREATE_MIGRATIONS_TABLE)
     applied = {
         int(row[0])
@@ -55,7 +57,9 @@ async def apply_async_sqlite_migrations(
     namespace: str,
     migrations: list[SQLiteMigration] | tuple[SQLiteMigration, ...],
 ) -> None:
-    """Apply pending SQLite migrations on an aiosqlite connection."""
+    """Apply migrations atomically; the caller commits or rolls back the transaction."""
+    if not db.in_transaction:
+        await db.execute("BEGIN IMMEDIATE")
     await db.execute(_CREATE_MIGRATIONS_TABLE)
     async with db.execute(
         "SELECT version FROM schema_migrations WHERE namespace = ?",

@@ -12,7 +12,10 @@ Configuration (environment variables)
 ``EMAIL_ADDRESS`` / ``EMAIL_PASSWORD``   mailbox login (required to enable)
 ``EMAIL_IMAP_HOST`` / ``EMAIL_IMAP_PORT``   inbox (default port 993, SSL)
 ``EMAIL_SMTP_HOST`` / ``EMAIL_SMTP_PORT``   outbound (default port 465, SSL)
-``EMAIL_ALLOWED_SENDERS``   optional comma-separated allowlist of From addresses
+``EMAIL_ALLOWED_SENDERS``   comma-separated allowlist of From addresses;
+                            required unless public access is explicitly enabled
+``AGENT_ALLOW_PUBLIC_CHANNELS``  set to ``true`` only to deliberately accept
+                            mail from anyone when no allowlist is configured
 ``EMAIL_POLL_INTERVAL``   seconds between inbox polls (default 20)
 """
 from __future__ import annotations
@@ -28,6 +31,7 @@ from email.message import EmailMessage
 from email.utils import parseaddr
 from typing import Any
 
+from adapters._access import allow_public_channels
 from adapters._progress import format_tool_call
 
 logger = logging.getLogger(__name__)
@@ -104,6 +108,7 @@ class EmailAdapter:
         self._reset_fn = reset_fn
         self._poll_interval = poll_interval
         self._allowed = _parse_allowlist(os.getenv("EMAIL_ALLOWED_SENDERS", ""))
+        self._allow_public_channels = allow_public_channels()
         self._running = False
         self._task: asyncio.Task[None] | None = None
 
@@ -165,6 +170,9 @@ class EmailAdapter:
         sender = (msg.get("from") or "").lower()
         body = (msg.get("body") or "").strip()
         if not sender or not body:
+            return
+        if self._allowed is None and not self._allow_public_channels:
+            logger.info("Email from %s ignored because no sender allowlist is configured", sender)
             return
         if self._allowed is not None and sender not in self._allowed:
             logger.info("Email from %s ignored (not in allowlist)", sender)

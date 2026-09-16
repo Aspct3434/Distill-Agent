@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 # Load .env BEFORE any local imports so module-level os.getenv() calls in
 # agent.py / tools.py see the values (e.g. AGENT_SANDBOX, AGENT_MODEL, etc.).
@@ -26,7 +27,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / "an-api.env")
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from agent import AgentEngine, NormalizedMessage
@@ -920,7 +921,7 @@ def _ws_token(websocket: WebSocket) -> str | None:
 async def _auth_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    if request.method == "OPTIONS" or request.url.path in _AUTH_OPEN_PATHS:
+    if request.url.path in _AUTH_OPEN_PATHS:
         return await call_next(request)
     signed_proxy_port = _signed_proxy_request_port(request)
     if signed_proxy_port is not None:
@@ -928,21 +929,44 @@ async def _auth_middleware(
             await _rate_limiter.check(_rate_limit_key_for_proxy(request, signed_proxy_port))
         except HTTPException as exc:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-        response = await call_next(request)
         expires = request.query_params.get(PROXY_EXPIRES_PARAM)
-        if expires and request.query_params.get(PROXY_TOKEN_PARAM):
+        if expires and verify_proxy_token(
+            signed_proxy_port, expires, request.query_params.get(PROXY_TOKEN_PARAM)
+        ):
             try:
-                max_age = max(0, int(expires) - int(time.time()))
+                expires_at = int(expires)
+                max_age = max(0, expires_at - int(time.time()))
             except ValueError:
+                expires_at = None
                 max_age = None
+            # Redeem a signed URL into a port-scoped cookie before proxying.
+            # Keeping the capability out of the upstream request and browser URL
+            # prevents it leaking through page scripts, referrers, or logs.
+            location = request.scope.get("raw_path", b"").decode("ascii") or quote(
+                request.scope["path"], safe="/"
+            )
+            remaining_query = strip_proxy_auth_params(str(request.query_params))
+            if remaining_query:
+                location = f"{location}?{remaining_query}"
+            response = RedirectResponse(
+                location,
+                status_code=307,
+                headers={
+                    "Cache-Control": "no-store",
+                    "Referrer-Policy": "no-referrer",
+                },
+            )
             response.set_cookie(
                 proxy_cookie_name(signed_proxy_port),
-                proxy_cookie_value(signed_proxy_port, int(expires)),
+                proxy_cookie_value(signed_proxy_port, expires_at),
                 max_age=max_age,
                 httponly=True,
                 samesite="lax",
+                secure=request.url.scheme == "https",
+                path=f"/proxy/{signed_proxy_port}",
             )
-        return response
+            return response
+        return await call_next(request)
     if not _auth_configured_or_explicitly_disabled():
         return JSONResponse(
             {
@@ -994,12 +1018,35 @@ _PROXY_REQUEST_SKIP_HEADERS = {
     "content-length",
     "connection",
     "accept-encoding",
+    # Gateway credentials and routing metadata must never be sent to an
+    # untrusted service being exposed through this reverse proxy.
+    "authorization",
+    "x-api-key",
+    "proxy-authorization",
+    "cookie",
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-port",
+    "x-forwarded-proto",
+    "x-http-method-override",
+    "x-method-override",
 }
 _PROXY_RESPONSE_SKIP_HEADERS = {
     "content-encoding",
     "content-length",
     "connection",
     "transfer-encoding",
+    # Do not let proxied applications set cookies or CORS policy on the
+    # gateway origin. The gateway owns both.
+    "set-cookie",
+    "access-control-allow-origin",
+    "access-control-allow-credentials",
+    "access-control-expose-headers",
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-max-age",
+    "referrer-policy",
 }
 
 
@@ -1234,11 +1281,11 @@ async def cancel_session(session_id: str) -> dict[str, Any]:
 
 @app.api_route(
     "/proxy/{port}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
 )
 @app.api_route(
     "/proxy/{port}/{path:path}",
-    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
 )
 async def proxy_local_http_service(
     port: int,
@@ -1249,7 +1296,7 @@ async def proxy_local_http_service(
     if port < 1 or port > 65535:
         raise HTTPException(status_code=400, detail="Port must be between 1 and 65535")
 
-    upstream_query = strip_proxy_auth_params(request.url.query)
+    upstream_query = strip_proxy_auth_params(str(request.query_params))
     target_url = httpx.URL(
         f"http://127.0.0.1:{port}/{path}",
         query=upstream_query.encode("utf-8"),
@@ -1284,6 +1331,7 @@ async def proxy_local_http_service(
             for key, value in (upstream_payload.get("headers") or {}).items()
             if key.lower() not in _PROXY_RESPONSE_SKIP_HEADERS
         }
+        response_headers["Referrer-Policy"] = "no-referrer"
         return Response(
             content=body,
             status_code=int(upstream_payload.get("status_code") or 502),
@@ -1310,6 +1358,7 @@ async def proxy_local_http_service(
         for key, value in upstream.headers.items()
         if key.lower() not in _PROXY_RESPONSE_SKIP_HEADERS
     }
+    response_headers["Referrer-Policy"] = "no-referrer"
     content = _rewrite_proxy_html(upstream.content, upstream.headers.get("content-type", ""), port)
     return Response(
         content=content,
@@ -1378,7 +1427,7 @@ async def replay_checkpoint(
             user_correction=payload.correction,
         ):
             events.append(event)
-            if event.get("type") == "text":
+            if event.get("type") in {"text", "final_answer"}:
                 final_output = str(event.get("content", ""))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1425,6 +1474,13 @@ async def ws_stream(websocket: WebSocket) -> None:
                     )
                 )
             raise
+        except Exception:
+            logger.exception("Streaming task failed for session %s", msg.session_id)
+            with suppress(Exception):
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "detail": "The task failed. Check the gateway logs for details and retry.",
+                }))
 
     def cleanup_stream_task(session_id: str, task: asyncio.Task[None]) -> None:
         if app.state.active_stream_tasks.get(session_id) is task:
@@ -1435,9 +1491,22 @@ async def ws_stream(websocket: WebSocket) -> None:
     try:
         while True:
             raw = await websocket.receive_text()
-            data = json.loads(raw)
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = None
+            if not isinstance(data, dict):
+                await websocket.send_text(json.dumps({
+                    "type": "error", "detail": "Message must be a JSON object.",
+                }))
+                continue
             session_id = data.get("session_id", "__anon__")
-            text = str(data.get("text") or "")
+            text = data.get("text", "")
+            if not isinstance(session_id, str) or not session_id.strip() or not isinstance(text, str):
+                await websocket.send_text(json.dumps({
+                    "type": "error", "detail": "Provide a nonempty session_id and string text.",
+                }))
+                continue
             if data.get("type") == "cancel" or is_stop_command(text):
                 task = app.state.active_stream_tasks.get(session_id)
                 if task is not None and not task.done():
@@ -1453,6 +1522,18 @@ async def ws_stream(websocket: WebSocket) -> None:
                         }
                     )
                 )
+                continue
+
+            active_task = app.state.active_stream_tasks.get(session_id)
+            if active_task is not None and not active_task.done():
+                await websocket.send_text(json.dumps({
+                    "type": "error", "detail": "A task is already running for this session.",
+                }))
+                continue
+            if not text.strip():
+                await websocket.send_text(json.dumps({
+                    "type": "error", "detail": "Message text must not be empty.",
+                }))
                 continue
 
             try:
@@ -1471,10 +1552,11 @@ async def ws_stream(websocket: WebSocket) -> None:
                 functools.partial(cleanup_stream_task, session_id)
             )
     except WebSocketDisconnect:
+        pass
+    finally:
         if current_task is not None and not current_task.done():
             current_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await current_task
+            await asyncio.gather(current_task, return_exceptions=True)
 
 
 # ---------------------------------------------------------------------------

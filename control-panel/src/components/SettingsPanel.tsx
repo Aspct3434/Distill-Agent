@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Cpu, KeyRound, LogIn, LogOut, RefreshCw, Save } from "lucide-react";
-import { api, type AuthStatus, type ModelConfig } from "../lib/api";
+import { api, getApiToken, type AuthStatus, type ModelConfig } from "../lib/api";
 
 export function SettingsPanel() {
   const [model, setModel] = useState<ModelConfig>({ model: "", fast_model: "", strong_model: "" });
@@ -8,6 +8,22 @@ export function SettingsPanel() {
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [gatewayToken, setGatewayToken] = useState(getApiToken);
+  const [tokenSaved, setTokenSaved] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+
+  function saveGatewayToken(e: React.FormEvent) {
+    e.preventDefault();
+    setTokenError(null);
+    try {
+      localStorage.setItem("agent_api_token", gatewayToken.trim());
+      setTokenSaved(true);
+      // Recreate the WebSocket and retry panel requests using the new token.
+      window.setTimeout(() => window.location.reload(), 750);
+    } catch {
+      setTokenError("Browser storage is unavailable. Allow site storage to save the gateway token.");
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -107,6 +123,38 @@ export function SettingsPanel() {
           {error}
         </div>
       )}
+
+      <section className="flex flex-col gap-3">
+        <h3 className="text-sm font-semibold text-zinc-300">Gateway access</h3>
+        <p className="text-xs text-zinc-500">
+          Paste the AGENT_API_TOKEN from the gateway's environment file (usually an-api.env). It is saved in this browser
+          and used to connect to the gateway.
+        </p>
+        <form onSubmit={saveGatewayToken} className="flex flex-col gap-3 rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+          <label className="flex flex-col gap-1 text-xs text-zinc-400">
+            Gateway API token
+            <input
+              type="password"
+              autoComplete="off"
+              value={gatewayToken}
+              onChange={(e) => setGatewayToken(e.target.value)}
+              disabled={tokenSaved}
+              className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-violet-600"
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={tokenSaved}
+              className="flex items-center gap-1.5 rounded-lg bg-violet-700 px-4 py-1.5 text-xs text-white hover:bg-violet-600 disabled:opacity-50"
+            >
+              <Save size={13} /> Save gateway token
+            </button>
+            {tokenSaved && <span role="status" className="text-xs text-emerald-400">Saved. Reconnecting…</span>}
+          </div>
+          {tokenError && <p role="alert" className="text-xs text-red-300">{tokenError}</p>}
+        </form>
+      </section>
 
       <section className="flex flex-col gap-3">
         <h3 className="text-sm font-semibold text-zinc-300">Authentication</h3>

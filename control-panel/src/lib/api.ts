@@ -2,7 +2,7 @@
 
 export const API_BASE = "http://127.0.0.1:8000";
 
-// Optional API token. Only needed when the gateway sets AGENT_API_TOKEN.
+// Gateway API token, required unless explicit insecure development mode is enabled.
 // Resolved from localStorage first (lets an operator paste it at runtime),
 // falling back to the VITE_AGENT_API_TOKEN build-time env var.
 export function getApiToken(): string {
@@ -24,7 +24,7 @@ export function withWsToken(url: string): string {
   return `${url}${sep}token=${encodeURIComponent(token)}`;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, asBlob = false): Promise<T> {
   const token = getApiToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -46,11 +46,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`${res.status} ${detail}`);
   }
   if (res.status === 204) return undefined as T;
+  if (asBlob) return (await res.blob()) as T;
   return (await res.json()) as T;
 }
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
+  blob: (path: string) => request<Blob>(path, undefined, true),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body?: unknown) =>

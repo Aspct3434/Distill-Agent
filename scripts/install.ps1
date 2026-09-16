@@ -16,6 +16,7 @@ $RootDir = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 if ([string]::IsNullOrWhiteSpace($EnvFile)) {
     $EnvFile = Join-Path $RootDir "an-api.env"
 }
+$EnvFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($EnvFile)
 
 function Normalize([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return "" }
@@ -276,11 +277,11 @@ $DiscordToken = ""
 $DiscordAllowed = ""
 if (@("telegram", "both") -contains $MessagingChoice) {
     $TelegramToken = Prompt-Secret "TELEGRAM_BOT_TOKEN" "Telegram bot token"
-    $TelegramAllowed = Prompt-Value "Telegram allowed chat IDs, blank = all" ""
+    $TelegramAllowed = Prompt-Value "Telegram allowed chat IDs (comma-separated; blank blocks messages)" ""
 }
 if (@("discord", "both") -contains $MessagingChoice) {
     $DiscordToken = Prompt-Secret "DISCORD_BOT_TOKEN" "Discord bot token"
-    $DiscordAllowed = Prompt-Value "Discord allowed user IDs, blank = all" ""
+    $DiscordAllowed = Prompt-Value "Discord allowed user IDs (comma-separated; blank blocks messages)" ""
 }
 
 $AgentSandbox = ""
@@ -329,6 +330,7 @@ function Generated-Env {
 if ($DryRun) {
     Write-Host "# Dry run: generated env for $EnvFile"
     Generated-Env | ForEach-Object { Write-Host $_ }
+    Write-Host "# AGENT_API_TOKEN will be generated if no existing token is configured."
     exit 0
 }
 
@@ -349,7 +351,26 @@ if (Test-Path $EnvFile) {
 Generated-Env | ForEach-Object { $out.Add($_) }
 $parent = Split-Path -Parent $EnvFile
 if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-Set-Content -Path $EnvFile -Value $out -Encoding UTF8
+[System.IO.File]::WriteAllLines($EnvFile, $out, [System.Text.UTF8Encoding]::new($false))
+
+function Test-EnvSecret([string]$Path, [string]$Key) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $lines = @(Get-Content -LiteralPath $Path | Where-Object { $_ -match "^\s*(?:export\s+)?$Key\s*=" })
+    if ($lines.Count -eq 0) { return $false }
+    $value = ($lines[-1] -split "=", 2)[1].Trim() -replace '\s+#.*$', ''
+    return ($value -and $value -ne '""' -and $value -ne "''" -and -not $value.StartsWith("#"))
+}
+
+function New-Secret([int]$Length) {
+    $bytes = New-Object byte[] $Length
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+
+if (-not (Test-EnvSecret $EnvFile "AGENT_API_TOKEN")) {
+    Add-Content -LiteralPath $EnvFile -Value "AGENT_API_TOKEN=$(New-Secret 32)" -Encoding UTF8
+}
 Write-Host "Wrote $EnvFile"
 
 # docker-compose.yml requires NEO4J_PASSWORD (no insecure default). Compose
@@ -357,11 +378,8 @@ Write-Host "Wrote $EnvFile"
 function Ensure-Neo4jPassword {
     if ($env:NEO4J_PASSWORD) { return }
     $composeEnv = Join-Path $RootDir ".env"
-    if ((Test-Path $composeEnv) -and (Select-String -Path $composeEnv -Pattern "^NEO4J_PASSWORD=" -Quiet)) { return }
-    $bytes = New-Object byte[] 24
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    $pw = ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
-    Add-Content -Path $composeEnv -Value "NEO4J_PASSWORD=$pw" -Encoding UTF8
+    if (Test-EnvSecret $composeEnv "NEO4J_PASSWORD") { return }
+    Add-Content -LiteralPath $composeEnv -Value "`nNEO4J_PASSWORD=$(New-Secret 24)" -Encoding UTF8
     Write-Host "Generated NEO4J_PASSWORD in $composeEnv"
 }
 
@@ -370,6 +388,7 @@ if (-not $NoStart) {
         Push-Location $RootDir
         $env:INSTALL_ML = $UseHybrid
         $env:AGENT_USE_HYBRID_MEMORY = $UseHybrid
+        $env:AGENT_ENV_FILE = $EnvFile
         Ensure-Neo4jPassword
         try { docker compose up -d --build } finally { Pop-Location }
     }
@@ -403,7 +422,7 @@ if (-not $NoStart) {
                     & $venvPython -m pip install @ReqArgs
                 }
             }
-            Start-Process -FilePath $venvPython -ArgumentList @("-m", "uvicorn", "gateway:app", "--app-dir", "src", "--host", "127.0.0.1", "--port", "8000") -WorkingDirectory $RootDir -RedirectStandardOutput (Join-Path $logs "backend-local.stdout.log") -RedirectStandardError (Join-Path $logs "backend-local.stderr.log") -WindowStyle Hidden
+            Start-Process -FilePath $venvPython -ArgumentList @("-m", "uvicorn", "gateway:app", "--app-dir", "src", "--env-file", "`"$EnvFile`"", "--host", "127.0.0.1", "--port", "8000") -WorkingDirectory $RootDir -RedirectStandardOutput (Join-Path $logs "backend-local.stdout.log") -RedirectStandardError (Join-Path $logs "backend-local.stderr.log") -WindowStyle Hidden
             Push-Location (Join-Path $RootDir "control-panel")
             try {
                 npm ci --no-audit --no-fund
@@ -418,6 +437,7 @@ if (-not $NoStart) {
 Write-Host "Agent AI setup complete."
 Write-Host "Control panel: http://localhost:5173"
 Write-Host "API health:    http://localhost:8000/health"
+Write-Host "Copy AGENT_API_TOKEN from $EnvFile into Control Panel Settings."
 
 if ($OpenAIAuthMethod -eq "oauth") {
     Write-Host ""

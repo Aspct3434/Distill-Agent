@@ -44,6 +44,95 @@ function assertIncludes(text, expected) {
 }
 
 {
+  const { __testing, defaultProviderSettings } = require(path.join(root, "lib", "distill-cli.js"));
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "distill-env-update-"));
+  const envPath = path.join(installDir, "an-api.env");
+  const original = 'CUSTOM_SETTING=keep\n export AGENT_MODEL = "old-model"\nAGENT_PLANNING_MAX_TOKENS=1\nAGENT_ARTIFACT_MAX_TOKENS=2\nexport AGENT_API_TOKEN = "" # unset\n';
+  fs.writeFileSync(envPath, original);
+  const config = {
+    installDir, sandbox: "on", messaging: "none", memory: "lite",
+    providerSettings: defaultProviderSettings("ollama"), messagingSettings: {}
+  };
+  __testing.writeEnvFile(config);
+  const content = fs.readFileSync(envPath, "utf8");
+  assertIncludes(content, "CUSTOM_SETTING=keep");
+  assert(!content.includes("old-model"));
+  assert.strictEqual((content.match(/^AGENT_PLANNING_MAX_TOKENS=/gm) || []).length, 1);
+  assert.strictEqual((content.match(/^AGENT_ARTIFACT_MAX_TOKENS=/gm) || []).length, 1);
+  const backup = fs.readdirSync(installDir).find((name) => name.startsWith("an-api.env.bak."));
+  assert.strictEqual(fs.readFileSync(path.join(installDir, backup), "utf8"), original);
+  const token = content.match(/^AGENT_API_TOKEN=([a-f0-9]{64})$/m)?.[1];
+  assert(token, "installation must generate a gateway token when the existing value is blank");
+  __testing.writeEnvFile(config);
+  assertIncludes(fs.readFileSync(envPath, "utf8"), `AGENT_API_TOKEN=${token}\n`);
+  const customToken = "export AGENT_API_TOKEN = 'existing-$literal-token'";
+  fs.writeFileSync(envPath, `${customToken}\n`);
+  __testing.writeEnvFile(config);
+  const preservedToken = fs.readFileSync(envPath, "utf8");
+  assertIncludes(preservedToken, customToken);
+  assert(!/^AGENT_API_TOKEN=/m.test(preservedToken), "existing nonempty tokens must not be replaced");
+}
+
+{
+  const { __testing } = require(path.join(root, "lib", "distill-cli.js"));
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "distill-compose-env-"));
+  const envPath = path.join(installDir, ".env");
+  const previous = process.env.NEO4J_PASSWORD;
+  try {
+    delete process.env.NEO4J_PASSWORD;
+    __testing.ensureNeo4jPassword({ installDir, dryRun: true });
+    assert(!fs.existsSync(envPath), "dry runs must not create configuration files");
+    __testing.ensureNeo4jPassword({ installDir });
+    const generated = fs.readFileSync(envPath, "utf8");
+    assert.match(generated, /^NEO4J_PASSWORD=[a-f0-9]{48}\n$/);
+    __testing.ensureNeo4jPassword({ installDir });
+    assert.strictEqual(fs.readFileSync(envPath, "utf8"), generated, "restarts must preserve passwords");
+    for (const value of ["", '""', "'' # unset", "# unset"]) {
+      fs.writeFileSync(envPath, `OTHER_SETTING=keep\nNEO4J_PASSWORD=${value}`);
+      __testing.ensureNeo4jPassword({ installDir });
+      const replaced = fs.readFileSync(envPath, "utf8");
+      assertIncludes(replaced, "OTHER_SETTING=keep\n");
+      assert.match(replaced, /^NEO4J_PASSWORD=[a-f0-9]{48}$/m);
+      assert.strictEqual((replaced.match(/^NEO4J_PASSWORD=/gm) || []).length, 1);
+    }
+    const custom = 'OTHER_SETTING=keep\nexport NEO4J_PASSWORD = "existing-password"\n';
+    fs.writeFileSync(envPath, custom);
+    __testing.ensureNeo4jPassword({ installDir });
+    assert.strictEqual(fs.readFileSync(envPath, "utf8"), custom);
+    fs.unlinkSync(envPath);
+    process.env.NEO4J_PASSWORD = "external-password";
+    __testing.ensureNeo4jPassword({ installDir });
+    assert(!fs.existsSync(envPath), "an inherited password must not be replaced");
+  } finally {
+    if (previous === undefined) delete process.env.NEO4J_PASSWORD;
+    else process.env.NEO4J_PASSWORD = previous;
+  }
+}
+
+// Run the pipe regression in a subprocess with a timeout so the original
+// deadlock fails the test instead of hanging the entire test suite.
+{
+  const modulePath = path.join(root, "lib", "distill-cli.js");
+  const childCode = `
+    const assert = require('assert');
+    const { __testing } = require(${JSON.stringify(modulePath)});
+    (async () => {
+      await __testing.run(process.execPath, ['-e', "process.stdout.write('x'.repeat(2 * 1024 * 1024)); process.stderr.write('y'.repeat(2 * 1024 * 1024));"], { stdio: 'pipe' });
+      await assert.rejects(
+        __testing.run(process.execPath, ['-e', "process.stderr.write('dependency failure detail'); process.exitCode = 7;"], { stdio: 'pipe' }),
+        /code 7[\\s\\S]*dependency failure detail/
+      );
+      const settings = await __testing.collectMessagingSettings({ question: async () => 'allowed-value' }, 'all');
+      for (const key of ['telegramAllowed', 'discordAllowed', 'slackAllowed', 'emailAllowed']) {
+        assert.strictEqual(settings[key], 'allowed-value');
+      }
+    })().catch((error) => { console.error(error); process.exitCode = 1; });
+  `;
+  const result = spawnSync(process.execPath, ["-e", childCode], { cwd: root, encoding: "utf8", timeout: 15000 });
+  assert.strictEqual(result.status, 0, result.error ? result.error.message : result.stderr);
+}
+
+{
   const installDir = tempInstallDir("quickstart");
   const result = run([
     "install",
@@ -73,6 +162,8 @@ function assertIncludes(text, expected) {
   assertIncludes(result.stdout, "Start later with: npx @aspct/distill-agent start");
   assertIncludes(result.stdout, "Installation Summary");
   assertIncludes(result.stdout, "missing");
+  assertIncludes(result.stdout, "Copy AGENT_API_TOKEN");
+  assert(!fs.existsSync(path.join(installDir, "an-api.env")), "dry runs must not persist a gateway token");
 }
 
 {

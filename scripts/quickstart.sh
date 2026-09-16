@@ -32,8 +32,8 @@ fi
 add_secret() {  # add_secret VAR FILE [length]
   local var="$1" file="$2" len="${3:-24}"
   touch "$file"
-  if ! grep -q "^${var}=" "$file"; then
-    printf '%s=%s\n' "$var" "$(gen_secret "$len")" >> "$file"
+  if ! grep -Eq "^${var}=[[:space:]]*[^[:space:]]" "$file"; then
+    printf '\n%s=%s\n' "$var" "$(gen_secret "$len")" >> "$file"
     chmod 600 "$file" 2>/dev/null || true
     echo "Generated $var in $file"
   fi
@@ -45,7 +45,7 @@ add_secret AGENT_API_TOKEN "$ENV_FILE" 32
 echo "Building and starting the stack…"
 docker compose up -d --build
 
-TOKEN="$(grep '^AGENT_API_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+TOKEN="$(grep '^AGENT_API_TOKEN=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
 cat <<EOF
 
 Distill is starting up.

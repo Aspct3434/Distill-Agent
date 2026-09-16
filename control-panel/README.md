@@ -1,73 +1,54 @@
-# React + TypeScript + Vite
+# Distill control panel
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React and TypeScript interface for the Distill gateway. It includes streaming
+chat, task graphs, approvals, schedules, memory, skills, logs, and settings.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Use Node.js 20.19+ on the 20.x line, or 22.12+ on newer lines, as specified in
+`package.json`. From this directory:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+npm ci
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Start the Python gateway separately using the repository's installer or
+[local setup instructions](../README.md). The panel currently connects to
+`http://127.0.0.1:8000` and its WebSocket endpoint. Open the Vite URL shown in
+the terminal, normally `http://localhost:5173`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+In **Settings → Gateway API token**, enter the `AGENT_API_TOKEN` from your
+gateway environment file and save. The panel reloads to apply the token to
+HTTP requests and chat connections. The token and chat history are stored in
+this browser's local storage. The gateway requires a token by default;
+provider authentication is configured separately.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Checks
+
+```sh
+npm run lint
+npm run build
 ```
+
+Both checks run in CI on Linux and Windows. Build output goes to `dist/`.
+`npm run preview` serves that output for local inspection.
+
+Browser regressions live in
+[`tests/control-panel-browser-checks.js`](../tests/control-panel-browser-checks.js).
+They mock the gateway and WebSocket, so they need no model keys or running
+backend. They cover connection recovery, partial responses, navigation during
+a turn, history, token setup, skill exports, approvals, input composition,
+and unavailable browser storage.
+
+From the repository root, with Playwright CLI and its browser installed:
+
+```sh
+npm --prefix control-panel run dev -- --host 127.0.0.1 --port 5174
+# In another terminal:
+playwright-cli -s=control-panel-checks open about:blank
+playwright-cli -s=control-panel-checks run-code --filename tests/control-panel-browser-checks.js
+playwright-cli -s=control-panel-checks close
+```
+
+These browser checks are run separately from the lint/build CI job.

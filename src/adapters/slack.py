@@ -18,7 +18,11 @@ Configuration (environment variables)
     App-level token (``xapp-…``) with ``connections:write`` — required for
     Socket Mode.
 ``SLACK_ALLOWED_USERS``
-    Optional comma-separated Slack user-id allowlist. Unset = open to all.
+    Comma-separated Slack user-id allowlist. Required unless public access is
+    explicitly enabled.
+``AGENT_ALLOW_PUBLIC_CHANNELS``
+    Set to ``true`` only to deliberately accept messages from anyone when no
+    channel allowlist is configured. Defaults to ``false``.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ from typing import Any
 import httpx
 from websockets.asyncio.client import connect as ws_connect
 
+from adapters._access import allow_public_channels
 from adapters._commands import (
     PASSIVE_GREETING_RESPONSE,
     is_passive_greeting,
@@ -112,6 +117,7 @@ class SlackAdapter:
         self._allowed: frozenset[str] | None = _parse_str_set(
             os.getenv("SLACK_ALLOWED_USERS", "")
         )
+        self._allow_public_channels = allow_public_channels()
         self._running: bool = False
         self._task: asyncio.Task[None] | None = None
         self._http: httpx.AsyncClient | None = None
@@ -207,6 +213,8 @@ class SlackAdapter:
             return
 
         user_id: str = str(event.get("user") or "")
+        if self._allowed is None and not self._allow_public_channels:
+            return
         if self._allowed is not None and user_id not in self._allowed:
             return
 

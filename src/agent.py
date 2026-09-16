@@ -8,8 +8,10 @@ import re
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
+from contextlib import aclosing, asynccontextmanager
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Literal
+from weakref import WeakValueDictionary
 
 import litellm
 from mcp.types import CallToolResult
@@ -1281,6 +1283,19 @@ class AgentEngine:
         self._histories: dict[str, list[dict[str, Any]]] = {}
         self._session_steps: dict[str, list[ExecutionStep]] = {}
         self._artifact_ledgers: dict[str, ArtifactLedger] = {}
+        self._session_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+
+    @asynccontextmanager
+    async def _session_turn(self, session_id: str) -> AsyncGenerator[None, None]:
+        # Active and waiting turns keep a strong reference; completed sessions
+        # release their locks instead of growing a permanent per-session map.
+        lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+        try:
+            async with lock:
+                yield
+        finally:
+            del lock
+            self._evict_histories()
 
     def _artifact_ledger(self, session_id: str) -> ArtifactLedger:
         ledger = self._artifact_ledgers.get(session_id)
@@ -1316,6 +1331,16 @@ class AgentEngine:
         return final_text
 
     async def stream_task(
+        self, message: NormalizedMessage
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """Stream a turn, serializing all entry points that share this session."""
+        async with self._session_turn(message.session_id), aclosing(
+            self._stream_task(message)
+        ) as events:
+            async for event in events:
+                yield event
+
+    async def _stream_task(
         self, message: NormalizedMessage
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Yield a stream of JSON-serialisable payloads as the agent works.
@@ -1397,16 +1422,47 @@ class AgentEngine:
 
         payload = await self._checkpointer.load_checkpoint(checkpoint_id)
         session_id: str = payload.get("session_id", checkpoint_id)
+        async with self._session_turn(session_id), aclosing(
+            self._replay_checkpoint_payload(checkpoint_id, session_id, payload, user_correction)
+        ) as events:
+            async for event in events:
+                yield event
+
+    async def _replay_checkpoint_payload(
+        self,
+        checkpoint_id: str,
+        session_id: str,
+        payload: dict[str, Any],
+        user_correction: str | None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
         messages: list[dict[str, Any]] = list(payload["messages"])
+        steps = [ExecutionStep(**step) for step in payload.get("steps", [])]
+        self._session_steps[session_id] = steps
+        ledger = ArtifactLedger()
+        ledger.begin_turn()
+        for step in steps:
+            if step.kind == "tool_result" and not step.metadata.get("is_error"):
+                tool_name = str(step.metadata.get("tool_name") or "")
+                ledger.record(
+                    _evidence_items_from_payload(
+                        step.content,
+                        tool_name=tool_name,
+                        arguments=step.metadata.get("arguments") or {},
+                    ),
+                    tool_name,
+                )
+        self._artifact_ledgers[session_id] = ledger
+        self._histories[session_id] = messages
+        self._evict_histories()
 
         if user_correction is not None:
             messages.append({"role": "system", "content": user_correction})
 
         all_tools = await self._tools.list_all_tools()
 
-        # Recover the original user prompt for distiller metadata
+        # The checkpoint may contain several turns; resume the most recent one.
         original_prompt = next(
-            (m["content"] for m in messages if m.get("role") == "user"),
+            (m["content"] for m in reversed(messages) if m.get("role") == "user"),
             "",
         )
 
@@ -1419,10 +1475,15 @@ class AgentEngine:
         )
         yield {"type": "status", "message": f"Replaying from checkpoint {checkpoint_id}..."}
 
+        final_text = ""
         async for event in self._stream_react_loop(
             session_id, original_prompt, messages, all_tools
         ):
+            if event.get("type") in ("text", "final_answer"):
+                final_text = str(event.get("content") or final_text)
             yield event
+        if final_text:
+            self._record_turn(session_id, "assistant", final_text)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -2312,7 +2373,11 @@ class AgentEngine:
                         await self._checkpointer.save_checkpoint(
                             session_id=session_id,
                             step_number=iteration,
-                            state_payload={"session_id": session_id, "messages": messages},
+                            state_payload={
+                                "session_id": session_id,
+                                "messages": messages,
+                                "steps": [asdict(step) for step in steps],
+                            },
                         )
                     except Exception as exc:
                         logger.warning("Checkpoint save failed at iteration %d: %s", iteration, exc)
@@ -2953,7 +3018,7 @@ class AgentEngine:
                 return f"[create_skill error] {exc}", True, "__builtin__"
         if tool_name == "recall_memory":
             try:
-                return await self._recall_memory(arguments), False, "__builtin__"
+                return await self._recall_memory(arguments, session_id), False, "__builtin__"
             except Exception as exc:
                 return f"[recall_memory error] {exc}", True, "__builtin__"
         if tool_name == "list_evolution_candidates":
@@ -3074,13 +3139,15 @@ class AgentEngine:
             asyncio.to_thread(self._session_store.add_turn, session_id, role, content)
         )
 
-    async def _recall_memory(self, arguments: dict[str, Any]) -> str:
-        """Full-text search across past conversations (the recall_memory tool)."""
+    async def _recall_memory(self, arguments: dict[str, Any], session_id: str) -> str:
+        """Search only the active conversation's persisted turns."""
         if self._session_store is None:
             return json.dumps({"results": [], "note": "Session memory is not configured."})
         query = str(arguments.get("query", ""))
         limit = int(arguments.get("limit", 8) or 8)
-        results = await asyncio.to_thread(self._session_store.search, query, limit)
+        results = await asyncio.to_thread(
+            self._session_store.search, query, limit, session_id
+        )
         return json.dumps({"query": query, "results": results}, indent=2)
 
     def _list_evolution_candidates(self, arguments: dict[str, Any]) -> str:
@@ -3545,7 +3612,11 @@ class AgentEngine:
     def _evict_histories(self) -> None:
         """Drop least-recently-used sessions once the cap is exceeded."""
         while len(self._histories) > _MAX_SESSIONS:
-            oldest = next(iter(self._histories))
+            oldest = next(
+                (sid for sid in self._histories if sid not in self._session_locks), None
+            )
+            if oldest is None:
+                break  # Active conversations may temporarily exceed the cap.
             self._histories.pop(oldest, None)
             self._session_steps.pop(oldest, None)
             self._artifact_ledgers.pop(oldest, None)

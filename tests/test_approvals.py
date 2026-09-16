@@ -12,6 +12,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from approvals import ApprovalGate
 
 
+@pytest.mark.parametrize("mode", ["risk", "always", "disabled"])
+def test_invalid_mode_cannot_silently_disable_approval(mode):
+    with pytest.raises(ValueError, match="mode"):
+        ApprovalGate(mode=mode)
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), -1, 0])
+def test_invalid_timeout_is_rejected(timeout):
+    with pytest.raises(ValueError, match="timeout"):
+        ApprovalGate(timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_pending_approval_includes_complete_command():
+    gate = ApprovalGate(mode="all", timeout=5)
+    command = "echo " + "x" * 600 + "; rm -rf important"
+    task = asyncio.create_task(gate.request(command))
+    try:
+        await asyncio.sleep(0)
+        pending = gate.pending()
+        assert pending[0]["command"] == command
+        gate.resolve(pending[0]["id"], False)
+        assert (await task)[0] is False
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_approval_is_removed():
+    gate = ApprovalGate(mode="all", timeout=5)
+    task = asyncio.create_task(gate.request("echo test"))
+    await asyncio.sleep(0)
+    request_id = gate.pending()[0]["id"]
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert gate.pending() == []
+    assert gate.resolve(request_id, True) is False
+
+
 class TestRequiresApproval:
     def test_off_never_requires(self) -> None:
         gate = ApprovalGate(mode="off")

@@ -8,17 +8,19 @@ middleware reads at request time, so monkeypatching it flips auth on/off.
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from urllib.parse import parse_qs
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import httpx
 import pytest
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 import gateway
-from proxy_auth import signed_proxy_query
+from proxy_auth import proxy_cookie_value, signed_proxy_query
 
 
 def _make_request(
@@ -27,6 +29,7 @@ def _make_request(
     headers: dict | None = None,
     query: str = "",
     client: tuple[str, int] = ("203.0.113.10", 4242),
+    raw_path: bytes | None = None,
 ):
     raw = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     scope = {
@@ -37,6 +40,8 @@ def _make_request(
         "query_string": query.encode(),
         "client": client,
     }
+    if raw_path is not None:
+        scope["raw_path"] = raw_path
     return Request(scope)
 
 
@@ -141,7 +146,7 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_options_preflight_bypasses_auth(self, monkeypatch):
+    async def test_plain_options_requires_auth(self, monkeypatch):
         monkeypatch.setattr(gateway, "_API_TOKEN", "secret")
         monkeypatch.setattr(gateway, "_ALLOW_INSECURE_NO_AUTH", False)
 
@@ -151,7 +156,22 @@ class TestAuthMiddleware:
         resp = await gateway._auth_middleware(
             _make_request(method="OPTIONS"), call_next
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_cors_preflight_is_handled_before_auth(self, monkeypatch):
+        monkeypatch.setattr(gateway, "_API_TOKEN", "secret")
+        monkeypatch.setattr(gateway, "_ALLOW_INSECURE_NO_AUTH", False)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=gateway.app), base_url="http://test",
+        ) as client:
+            response = await client.options("/api/status", headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            })
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
     @pytest.mark.asyncio
     async def test_missing_token_returns_401(self, monkeypatch):
@@ -182,7 +202,7 @@ class TestAuthMiddleware:
         assert called["hit"] is True
 
     @pytest.mark.asyncio
-    async def test_signed_proxy_url_bypasses_api_token_without_exposing_api(self, monkeypatch):
+    async def test_signed_proxy_url_redirects_to_cookie_without_exposing_api(self, monkeypatch):
         monkeypatch.setattr(gateway, "_API_TOKEN", "secret")
         monkeypatch.setattr(gateway, "_ALLOW_INSECURE_NO_AUTH", False)
         query = signed_proxy_query(4321)
@@ -193,14 +213,19 @@ class TestAuthMiddleware:
             return PlainTextResponse("ok")
 
         resp = await gateway._auth_middleware(
-            _make_request(path="/proxy/4321/", query=query),
+            _make_request(path="/proxy/4321/", query=f"{query}&view=preview"),
             call_next,
         )
 
         parsed = parse_qs(query)
-        assert resp.status_code == 200
-        assert called["hit"] is True
-        assert "agent_proxy_4321=" in resp.headers.get("set-cookie", "")
+        assert resp.status_code == 307
+        assert called["hit"] is False
+        assert resp.headers["location"] == "/proxy/4321/?view=preview"
+        assert resp.headers["cache-control"] == "no-store"
+        assert resp.headers["referrer-policy"] == "no-referrer"
+        assert "agent_proxy_4321=" in resp.headers["set-cookie"]
+        assert "Path=/proxy/4321" in resp.headers["set-cookie"]
+        assert "HttpOnly" in resp.headers["set-cookie"]
         assert parsed["proxy_token"][0] != "secret"
 
         cookie = resp.headers["set-cookie"].split(";", 1)[0]
@@ -214,6 +239,45 @@ class TestAuthMiddleware:
         )
         assert asset_resp.status_code == 200
         assert called["hit"] is True
+
+        api_response = await gateway._auth_middleware(
+            _make_request(headers={"Cookie": cookie}), call_next,
+        )
+        assert api_response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_cookie_cannot_sign_unverified_query_expiry(self, monkeypatch):
+        monkeypatch.setattr(gateway, "_API_TOKEN", "secret")
+        expires = int(time.time()) + 120
+        cookie = f"agent_proxy_4321={proxy_cookie_value(4321, expires)}"
+
+        async def call_next(_req):
+            return PlainTextResponse("ok")
+
+        resp = await gateway._auth_middleware(_make_request(
+            path="/proxy/4321/", headers={"Cookie": cookie},
+            query=f"proxy_expires={expires + 100000}&proxy_token=invalid",
+        ), call_next)
+        assert resp.status_code == 200
+        assert "set-cookie" not in resp.headers
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("encoded,decoded", [
+        ("file%23name.html", "file#name.html"),
+        ("file%3Fname.html", "file?name.html"),
+    ])
+    async def test_signed_redirect_preserves_encoded_path(self, monkeypatch, encoded, decoded):
+        monkeypatch.setattr(gateway, "_API_TOKEN", "secret")
+
+        async def call_next(_req):
+            raise AssertionError("Signed URL must redirect before proxying")
+
+        response = await gateway._auth_middleware(_make_request(
+            path=f"/proxy/4321/{decoded}", raw_path=f"/proxy/4321/{encoded}".encode(),
+            query=f"{signed_proxy_query(4321)}&view=preview",
+        ), call_next)
+        assert response.status_code == 307
+        assert response.headers["location"] == f"/proxy/4321/{encoded}?view=preview"
 
     @pytest.mark.asyncio
     async def test_signed_proxy_url_is_bound_to_port(self, monkeypatch):
