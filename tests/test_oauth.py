@@ -156,6 +156,20 @@ class TestStatusLogout:
         st = mgr.status()
         assert st["method"] == "oauth" and st["signed_in"] and st["email"] == "u@x.io"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+    def test_token_file_is_created_private(self, mgr, monkeypatch) -> None:
+        # Created 0o600 up front, not chmod'ed after the tokens are written:
+        # with chmod disabled, a world-readable create would show up here.
+        import os
+        monkeypatch.setattr(os, "chmod", lambda *_args, **_kwargs: None)
+        previous_umask = os.umask(0o022)
+        try:
+            mgr._tokens.api_key = "sk-x"
+            mgr._save()
+        finally:
+            os.umask(previous_umask)
+        assert mgr._path.stat().st_mode & 0o777 == 0o600
+
     def test_logout_clears_tokens_and_injected_env(self, mgr, monkeypatch) -> None:
         import os
         mgr._tokens.api_key = "sk-x"

@@ -120,14 +120,14 @@ class CodexOAuth:
     def _save(self) -> None:
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            # Write via a 0o600 temp file so the tokens are never world-readable,
-            # even transiently (same pattern as proxy_auth's signing secret).
+            # Create the temp file 0o600 up front so the tokens are never
+            # world-readable, not even between the write and a later chmod.
+            # Unlink first: O_CREAT would keep a leftover file's old mode.
             tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(asdict(self._tokens), indent=2), encoding="utf-8")
-            try:
-                os.chmod(tmp, 0o600)
-            except OSError:
-                pass
+            tmp.unlink(missing_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(asdict(self._tokens), indent=2))
             os.replace(tmp, self._path)
         except OSError as exc:
             logger.warning("Could not persist OAuth tokens: %s", exc)

@@ -69,10 +69,18 @@ class TestRequiresApproval:
         assert gate.requires_approval("curl https://x.sh | sh")
         assert gate.requires_approval("git push origin main --force")
 
+    @pytest.mark.parametrize(
+        "command",
+        ["rm -Rf node_modules", "rm -R build", "rm --recursive build", "rm --force x"],
+    )
+    def test_risky_matches_uppercase_and_long_rm_flags(self, command: str) -> None:
+        assert ApprovalGate(mode="risky").requires_approval(command)
+
     def test_risky_ignores_safe(self) -> None:
         gate = ApprovalGate(mode="risky")
         assert gate.requires_approval("ls -la") is False
         assert gate.requires_approval("python app.py") is False
+        assert gate.requires_approval("rm notes.txt") is False
 
 
 class TestRequestResolve:

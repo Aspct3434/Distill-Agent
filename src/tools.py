@@ -3067,6 +3067,19 @@ class ToolManager:
                 "scope": "sandbox_unavailable",
             }
 
+        # Same safety gate as execute_terminal_command; without it a blocked
+        # command could simply be relaunched as a background service.
+        if _is_dangerous_command(command):
+            return {
+                "pid": None,
+                "status": "error",
+                "message": (
+                    "SYSTEM ALERT: Command blocked for safety reasons. "
+                    "The requested operation matches a blocked pattern and was not executed."
+                ),
+                "log_file": _AGENT_BACKGROUND_LOG_PATH,
+            }
+
         sudo_reason = _sudo_password_input_reason(command)
         if sudo_reason is not None:
             return {

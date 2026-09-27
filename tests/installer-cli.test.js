@@ -109,6 +109,37 @@ function assertIncludes(text, expected) {
   }
 }
 
+// writeFileSync's `mode` applies only on create, so a pre-existing env file
+// (a reinstall, or one copied from the example) must be tightened explicitly
+// before it holds API keys and the gateway token.
+if (process.platform !== "win32") {
+  const { __testing, defaultProviderSettings } = require(path.join(root, "lib", "distill-cli.js"));
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "distill-env-mode-"));
+  const envPath = path.join(installDir, "an-api.env");
+  fs.writeFileSync(envPath, "CUSTOM_SETTING=keep\n");
+  fs.chmodSync(envPath, 0o644);
+  __testing.writeEnvFile({
+    installDir, sandbox: "on", messaging: "none", memory: "lite",
+    providerSettings: defaultProviderSettings("ollama"), messagingSettings: {}
+  });
+  assert.strictEqual(fs.statSync(envPath).mode & 0o777, 0o600, "env file must not stay world-readable");
+  const backup = fs.readdirSync(installDir).find((name) => name.startsWith("an-api.env.bak."));
+  assert.strictEqual(fs.statSync(path.join(installDir, backup)).mode & 0o777, 0o600, "backup holds the same secrets");
+
+  const composeEnv = path.join(installDir, ".env");
+  fs.writeFileSync(composeEnv, "OTHER_SETTING=keep\n");
+  fs.chmodSync(composeEnv, 0o644);
+  const previous = process.env.NEO4J_PASSWORD;
+  try {
+    delete process.env.NEO4J_PASSWORD;
+    __testing.ensureNeo4jPassword({ installDir });
+  } finally {
+    if (previous === undefined) delete process.env.NEO4J_PASSWORD;
+    else process.env.NEO4J_PASSWORD = previous;
+  }
+  assert.strictEqual(fs.statSync(composeEnv).mode & 0o777, 0o600, ".env must not stay world-readable");
+}
+
 // Run the pipe regression in a subprocess with a timeout so the original
 // deadlock fails the test instead of hanging the entire test suite.
 {

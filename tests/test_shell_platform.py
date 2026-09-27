@@ -221,6 +221,23 @@ def test_background_service_blocked_when_sandbox_required_but_unavailable():
     assert "Host execution is blocked" in result["message"]
 
 
+def test_background_service_applies_dangerous_command_block_list(tmp_path):
+    # The block list used to guard only execute_terminal_command, so the same
+    # command (e.g. a reverse shell) launched fine as a background service.
+    manager = ToolManager.__new__(ToolManager)
+    manager._host_execution_disabled_reason = None
+    manager._sandbox = None
+    manager.current_cwd = str(tmp_path)
+    probe = "echo /dev/tcp/"  # harmless, but matches the reverse-shell pattern
+    assert _is_dangerous_command(probe)
+
+    result = manager.execute_background_service(probe)
+
+    assert result["status"] == "error"
+    assert result["pid"] is None
+    assert "blocked for safety" in result["message"]
+
+
 def _sandbox_file_manager(tmp_path: Path) -> ToolManager:
     class FakeSandbox:
         def write_text_file(self, path: str, content: str):

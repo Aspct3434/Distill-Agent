@@ -30,7 +30,7 @@ _RISKY_PATTERNS = [
     re.compile(p)
     for p in (
         r"\bsudo\b",
-        r"\brm\s+-[a-z]*[rf]",
+        r"\brm\s+(-[a-zA-Z]*[rRf]|--(recursive|force)\b)",
         r"\bmkfs\b",
         r"\bdd\b",
         r"\bshred\b",
