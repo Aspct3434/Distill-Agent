@@ -107,8 +107,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   result in `bool()` to fix mypy `no-any-return`.
 - **`list()` wraps** (`checkpointer.py`, `gateway.py`, `memory.py`): coerce
   `Any`-typed JSON/neo4j return values to `list` for mypy `no-any-return`.
+- **Hybrid-memory install** (`requirements-ml.txt`): a stray `</content>` line
+  made pip reject the file, breaking `INSTALL_ML=true` Docker builds and every
+  installer's hybrid mode. Guarded by `tests/test_requirements_files.py`.
+- **CI** (`ci.yml`, tests): red since May. The encoding check broke under
+  Windows `pwsh` quoting, and three tests assumed Windows paths/tempdirs.
+- **Docker persona** (`Dockerfile`): `persona/` was never copied into the
+  image, so every container deploy ran without `SOUL.md`/`AGENTS.md`.
+- **Email replies** (`email_adapter.py`): a long (folded) inbound subject made
+  the reply raise, so the sender silently never got an answer.
+- **Scheduler** (`scheduler.py`): a job that outlasted its interval queued
+  another run behind the session lock on every tick, without bound; a past
+  `once` time was accepted but never ran (until a restart fired it). Overdue
+  runs are now coalesced and past one-shot times are rejected.
 
 ### Security
+- **Background-service block list** (`tools.py`): `execute_background_service`
+  skipped `_is_dangerous_command`, so any command blocked in the foreground
+  (reverse shells, `rm -rf /`, fork bombs) could be launched in the background.
+- **Risky-mode approvals** (`approvals.py`): `rm -Rf`, `rm -R`, and
+  `rm --recursive/--force` ran without asking.
+- **Secret file modes** (`lib/distill-cli.js`, `auth/oauth.py`): rewriting an
+  existing env file (and its backup) left it world-readable; the OAuth token
+  store was briefly world-readable between write and `chmod`.
 - **Regex block list** (`tools.py`): replaced substring-match allow/block lists
   with compiled regex patterns anchored to dangerous command patterns (`dd`,
   `mkfs`, `shred`, `rm -rf /`, `chmod 777 /`).
