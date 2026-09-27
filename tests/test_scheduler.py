@@ -199,6 +199,13 @@ class TestValidateSchedule:
         with pytest.raises(ValueError):
             _validate_schedule("cron", "bad expr")
 
+    def test_once_in_past_rejected(self):
+        # A past one-shot used to be accepted with next_run=None: it never ran,
+        # then fired unexpectedly after the next restart.
+        with pytest.raises(ValueError, match="future"):
+            _validate_schedule("once", "2020-01-01T00:00:00Z")
+        _validate_schedule("once", "2999-01-01T00:00:00")  # naive = UTC, no raise
+
 
 @pytest.mark.asyncio
 async def test_running_job_does_not_reappear_after_removal(tmp_path):
@@ -231,6 +238,47 @@ async def test_running_job_does_not_reappear_after_removal(tmp_path):
         finish.set()
         if task is not None:
             await task
+        await scheduler.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_overrunning_job_is_not_stacked(tmp_path):
+    # Runs share the job's session lock, so a run that outlasts its interval
+    # must not queue another behind it on every tick (unbounded backlog).
+    calls = 0
+    finish = asyncio.Event()
+
+    async def runner(_session_id, _prompt):
+        nonlocal calls
+        calls += 1
+        await finish.wait()
+        return "ok"
+
+    scheduler = CronScheduler(str(tmp_path / "scheduler.db"), runner)
+    await scheduler.start()
+    try:
+        job = await scheduler.add_job(
+            schedule_type="interval", schedule_spec="10", prompt="run", session_id="s"
+        )
+        overdue = datetime(2020, 1, 1, tzinfo=UTC)
+        job.next_run = overdue
+        scheduler._dispatch_due_jobs(datetime.now(UTC))
+        await asyncio.sleep(0.05)
+        assert calls == 1
+
+        job.next_run = overdue  # the interval elapses while the run is in flight
+        scheduler._dispatch_due_jobs(datetime.now(UTC))
+        await asyncio.sleep(0.05)
+        assert calls == 1
+
+        finish.set()
+        await asyncio.gather(*scheduler._running_tasks)
+        job.next_run = overdue
+        scheduler._dispatch_due_jobs(datetime.now(UTC))
+        await asyncio.gather(*scheduler._running_tasks)
+        assert calls == 2
+    finally:
+        finish.set()
         await scheduler.shutdown()
 
 

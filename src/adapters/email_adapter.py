@@ -79,6 +79,9 @@ def _build_reply(to_addr: str, from_addr: str, subject: str, body: str) -> Email
     reply = EmailMessage()
     reply["From"] = from_addr
     reply["To"] = to_addr
+    # Parsed inbound subjects keep their header folding (CRLF + space), which
+    # EmailMessage rejects; unfold so long subjects still get a reply.
+    subject = " ".join(subject.split())
     reply["Subject"] = subject if subject.lower().startswith("re:") else f"Re: {subject}"
     reply.set_content(body)
     return reply

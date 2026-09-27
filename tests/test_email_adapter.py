@@ -96,6 +96,18 @@ class TestBuildReply:
         reply = _build_reply("to@x.com", "me@x.com", "Re: Question", "body")
         assert reply["Subject"] == "Re: Question"
 
+    def test_unfolds_long_inbound_subject(self) -> None:
+        # Clients fold long subjects; the parsed value keeps the CRLF, which
+        # EmailMessage rejects -- previously the reply was silently dropped.
+        inbound = email.message_from_bytes(
+            b"Subject: Please deploy the staging build and run the regression\r\n"
+            b" suite before Friday\r\n\r\nbody\r\n"
+        )
+        reply = _build_reply("to@x.com", "me@x.com", inbound["Subject"], "body")
+        assert reply["Subject"] == (
+            "Re: Please deploy the staging build and run the regression suite before Friday"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Fixtures

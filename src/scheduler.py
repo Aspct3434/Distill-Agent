@@ -12,6 +12,7 @@ and cron use cases (minimum practical granularity is 1 minute for cron).
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -165,6 +166,7 @@ class CronScheduler:
         self._jobs: dict[str, ScheduledJob] = {}
         self._task: asyncio.Task[None] | None = None
         self._running_tasks: set[asyncio.Task[None]] = set()
+        self._active_job_ids: set[str] = set()
         self._started = False
 
     def set_delivery(self, deliver: DeliveryFn) -> None:
@@ -273,22 +275,33 @@ class CronScheduler:
         while True:
             try:
                 await asyncio.sleep(10)
-                now = datetime.now(UTC)
-                due = [
-                    j for j in list(self._jobs.values())
-                    if j.enabled and j.next_run and j.next_run <= now
-                ]
-                for job in due:
-                    task = asyncio.create_task(
-                        self._run_job(job),
-                        name=f"cron:{job.job_id}",
-                    )
-                    self._running_tasks.add(task)
-                    task.add_done_callback(self._running_tasks.discard)
+                self._dispatch_due_jobs(datetime.now(UTC))
             except asyncio.CancelledError:
                 return
             except Exception:
                 logger.exception("Cron scheduler loop error")
+
+    def _dispatch_due_jobs(self, now: datetime) -> None:
+        # Skip jobs whose previous run is still in flight: runs share the job's
+        # session lock, so an overrunning job would otherwise queue one more run
+        # per tick without bound. It fires again on the first tick after it ends.
+        due = [
+            j for j in list(self._jobs.values())
+            if j.enabled and j.next_run and j.next_run <= now
+            and j.job_id not in self._active_job_ids
+        ]
+        for job in due:
+            self._active_job_ids.add(job.job_id)
+            task = asyncio.create_task(
+                self._run_job(job),
+                name=f"cron:{job.job_id}",
+            )
+            self._running_tasks.add(task)
+            task.add_done_callback(self._running_tasks.discard)
+            task.add_done_callback(functools.partial(self._release_job, job.job_id))
+
+    def _release_job(self, job_id: str, _task: asyncio.Task[None]) -> None:
+        self._active_job_ids.discard(job_id)
 
     async def _run_job(self, job: ScheduledJob) -> None:
         logger.info("Running job %s: %r", job.job_id, job.prompt[:80])
@@ -387,6 +400,10 @@ def _validate_schedule(schedule_type: str, spec: str) -> None:
     elif schedule_type == "cron":
         _cron_next_run(spec, datetime.now(UTC))  # dry-run parse
     elif schedule_type == "once":
-        datetime.fromisoformat(spec)
+        run_at = datetime.fromisoformat(spec)
+        if run_at.tzinfo is None:
+            run_at = run_at.replace(tzinfo=UTC)
+        if run_at <= datetime.now(UTC):
+            raise ValueError(f"One-shot time {spec!r} must be in the future")
     else:
         raise ValueError(f"Unknown schedule_type {schedule_type!r}; use interval/cron/once")
