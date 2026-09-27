@@ -28,4 +28,3 @@ sympy==1.14.0
 threadpoolctl==3.6.0
 torch==2.12.0
 transformers==5.8.1
-</content>

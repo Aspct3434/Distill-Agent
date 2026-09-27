@@ -61,6 +61,7 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && npx --version
 
 COPY src/ ./src/
+COPY persona/ ./persona/
 
 RUN groupadd --gid 1001 agent \
     && useradd --uid 1001 --gid agent --create-home --shell /bin/bash agent \

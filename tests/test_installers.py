@@ -232,6 +232,14 @@ def test_pywin32_requirement_is_windows_only() -> None:
     assert "\npywin32==311\n" not in text
 
 
+def test_docker_image_ships_persona() -> None:
+    # gateway.py loads <project root>/persona (/app/persona in the image);
+    # without this COPY every Docker deploy silently ran with no persona.
+    lines = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    assert "WORKDIR /app" in lines
+    assert "COPY persona/ ./persona/" in lines
+
+
 def test_powershell_scripts_parse() -> None:
     shell = _powershell()
     for path in (POWERSHELL_INSTALLER, POWERSHELL_BOOTSTRAP):
