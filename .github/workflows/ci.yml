@@ -68,11 +68,14 @@ jobs:
         continue-on-error: true
 
       - name: Verify all source files parse (encoding check)
+        # No double quotes inside the script: windows-latest runs this under
+        # pwsh, where \" does not escape and would truncate the argument.
         run: |
           python -c "
           import ast, pathlib, sys
+          files = list(pathlib.Path('src').glob('*.py'))
           errors = []
-          for f in pathlib.Path('src').glob('*.py'):
+          for f in files:
               try:
                   ast.parse(f.read_text(encoding='utf-8'))
               except SyntaxError as e:
@@ -80,7 +83,7 @@ jobs:
           if errors:
               for e in errors: print(e, file=sys.stderr)
               sys.exit(1)
-          print(f'All {sum(1 for _ in pathlib.Path(\"src\").glob(\"*.py\"))} source files parse OK')
+          print(f'All {len(files)} source files parse OK')
           "
 
       - name: Run eval harness self-test (no API key required)

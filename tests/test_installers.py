@@ -301,7 +301,8 @@ def test_powershell_bootstrap_dry_run_forwards_options(tmp_path: Path) -> None:
     )
 
     assert "git clone --depth 1 --single-branch --branch master https://github.com/example/agent-ai.git" in result.stdout
-    assert "scripts\\install.ps1" in result.stdout
+    # Join-Path emits the host separator (pwsh also runs on the Linux CI job).
+    assert os.path.join("scripts", "install.ps1") in result.stdout
     assert "-Provider openrouter" in result.stdout
     assert "-Sandbox off" in result.stdout
     assert "-Messaging both" in result.stdout

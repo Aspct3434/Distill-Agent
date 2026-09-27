@@ -175,11 +175,10 @@ def test_background_log_path_is_portable():
     """_BACKGROUND_LOG_PATH must not hardcode /tmp (breaks on Windows)."""
     import tempfile
     log = tools_module._BACKGROUND_LOG_PATH
-    assert not log.startswith("/tmp"), (
+    # On Linux the tempdir usually *is* /tmp, so compare against it rather
+    # than rejecting /tmp outright; the Windows CI job catches a hardcode.
+    assert Path(log).parent == Path(tempfile.gettempdir()), (
         f"_BACKGROUND_LOG_PATH should use tempfile.gettempdir(), got {log!r}"
-    )
-    assert tempfile.gettempdir().lower() in log.lower() or Path(log).parent.exists(), (
-        f"Expected log inside tempdir, got {log!r}"
     )
 
 
@@ -225,7 +224,7 @@ def test_background_service_blocked_when_sandbox_required_but_unavailable():
 def _sandbox_file_manager(tmp_path: Path) -> ToolManager:
     class FakeSandbox:
         def write_text_file(self, path: str, content: str):
-            target = tmp_path / path.removeprefix("/workspace/").replace("/", "\\")
+            target = tmp_path / path.removeprefix("/workspace/")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
             return {"path": path, "exists": True, "size_bytes": target.stat().st_size}
